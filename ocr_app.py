@@ -410,13 +410,18 @@ class OCRApp(QMainWindow):
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
+        
+        # Replaced QSplitter with a standard QHBoxLayout to permanently lock the layout
         layout = QHBoxLayout(central)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # --- LEFT PANEL ---
+        # --- LEFT PANEL (Strictly Fixed Width) ---
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
-        left_scroll.setStyleSheet("QScrollArea { border: none; }")
+        left_scroll.setFixedWidth(400) # Locks the entire left panel so it can't be resized
+        left_scroll.setStyleSheet("QScrollArea { border: none; border-right: 2px solid #333; }")
+        
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -490,7 +495,9 @@ class OCRApp(QMainWindow):
 
         props_layout.addWidget(QLabel("<i>Live Processed Crop:</i>"))
         self.lbl_crop_preview = QLabel("No Region Selected")
-        self.lbl_crop_preview.setMinimumHeight(60)
+        
+        # IMPORTANT FIX: Lock the height of the preview image so it doesn't push the layout
+        self.lbl_crop_preview.setFixedHeight(120) 
         self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #555;")
         self.lbl_crop_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         props_layout.addWidget(self.lbl_crop_preview)
@@ -519,7 +526,7 @@ class OCRApp(QMainWindow):
         # --- RIGHT PANEL ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll_area.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
+        self.scroll_area.setStyleSheet("background-color: #000;")
         
         self.preview_overlay = ROIOverlayWidget(self.scroll_area)
         self.scroll_area.setWidget(self.preview_overlay)
@@ -529,10 +536,9 @@ class OCRApp(QMainWindow):
         self.preview_overlay.rois_changed.connect(self.engine.update_rois)
         self.preview_overlay.roi_selected.connect(self.populate_properties_panel)
 
-        splitter.addWidget(left_scroll)
-        splitter.addWidget(self.scroll_area)
-        splitter.setStretchFactor(1, 3)
-        layout.addWidget(splitter)
+        # Add to standard layout instead of a Splitter
+        layout.addWidget(left_scroll)
+        layout.addWidget(self.scroll_area, stretch=1) # Stretch=1 ensures the right side takes all remaining space
 
     def enable_properties_panel(self, enabled):
         """Grays out or enables the properties panel without hiding it."""
