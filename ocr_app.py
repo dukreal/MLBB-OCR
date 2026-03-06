@@ -4,7 +4,6 @@ import cv2
 import mss
 import json
 import time
-import datetime
 import numpy as np
 import pytesseract
 import pygetwindow as gw
@@ -13,7 +12,7 @@ from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
-                             QLineEdit, QTabWidget)
+                             QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
 
@@ -59,29 +58,55 @@ class ROIOverlayWidget(QWidget):
         self.drag_state = None
         self.last_mouse_pos = None
 
-    def add_roi(self):
+    def add_field(self):
+        """Creates a data field but does NOT add it to the scene yet."""
         self.rois.append({
             'id': self.area_counter,
-            'name': f'Area_{self.area_counter}',
+            'name': "", # Empty default value
             'rect': [0.4, 0.4, 0.2, 0.2],
             'type': 'General Text',
-            'threshold': 0, 
-            'thickness': 0, 
-            'confidence': 60 
+            'threshold': 1,  
+            'thickness': 5,  
+            'confidence': 6, 
+            'is_on_scene': False # Hide by default
         })
         self.selected_id = self.area_counter
         self.area_counter += 1
-        self.update()
         self.rois_changed.emit(self.rois)
         self.roi_selected.emit(self.selected_id)
 
-    def remove_selected_roi(self):
+    def remove_selected_field(self):
+        """Deletes the entire field from memory."""
         if self.selected_id is not None:
             self.rois = [r for r in self.rois if r['id'] != self.selected_id]
             self.selected_id = None
             self.update()
             self.rois_changed.emit(self.rois)
             self.roi_selected.emit(-1)
+
+    def add_to_scene(self):
+        """Places the selected field's box onto the video canvas."""
+        if self.selected_id is not None:
+            for roi in self.rois:
+                if roi['id'] == self.selected_id:
+                    roi['is_on_scene'] = True
+                    break
+            self.update()
+            self.rois_changed.emit(self.rois)
+
+    def remove_from_scene(self):
+        """Removes the selected field's box from the video canvas."""
+        if self.selected_id is not None:
+            for roi in self.rois:
+                if roi['id'] == self.selected_id:
+                    roi['is_on_scene'] = False
+                    break
+            self.update()
+            self.rois_changed.emit(self.rois)
+
+    def select_roi_by_id(self, roi_id):
+        self.selected_id = roi_id
+        self.update()
 
     def set_frame(self, pixmap):
         self.current_pixmap = pixmap
@@ -146,6 +171,9 @@ class ROIOverlayWidget(QWidget):
         painter.drawPixmap(0, 0, w, h, self.current_pixmap)
 
         for roi in self.rois:
+            if not roi['is_on_scene']: 
+                continue
+
             nx, ny, nw, nh = roi['rect']
             rx, ry, rw, rh = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
             is_selected = (roi['id'] == self.selected_id)
@@ -158,11 +186,14 @@ class ROIOverlayWidget(QWidget):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
 
             painter.drawRect(rx, ry, rw, rh)
+            
+            # Tag rendering
+            name_text = roi['name'] if roi['name'] else "Unnamed"
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(rx, ry - 20, max(80, len(roi['name'])*8), 20)
+            painter.drawRect(rx, ry - 20, max(80, len(name_text)*8), 20)
             painter.setPen(QColor(255, 255, 255))
-            painter.drawText(rx + 5, ry - 5, roi['name'])
+            painter.drawText(rx + 5, ry - 5, name_text)
 
             if is_selected:
                 painter.setBrush(QColor(0, 255, 0))
@@ -174,6 +205,8 @@ class ROIOverlayWidget(QWidget):
         
         clicked_roi = None
         for roi in reversed(self.rois):
+            if not roi['is_on_scene']: continue
+
             nx, ny, nw, nh = roi['rect']
             rx, ry, rw, rh = nx * w, ny * h, nw * w, nh * h
             
@@ -210,7 +243,7 @@ class ROIOverlayWidget(QWidget):
         dnx, dny = dx / self.width(), dy / self.height()
         
         for roi in self.rois:
-            if roi['id'] == self.selected_id:
+            if roi['id'] == self.selected_id and roi['is_on_scene']:
                 nx, ny, nw, nh = roi['rect']
                 if self.drag_state == 'move':
                     nx = max(0.0, min(nx + dnx, 1.0 - nw))
@@ -232,7 +265,7 @@ class ROIOverlayWidget(QWidget):
 
 class CaptureEngine(QThread):
     frame_signal = pyqtSignal(np.ndarray)
-    ocr_signal = pyqtSignal(str)
+    ocr_signal = pyqtSignal(dict, dict) 
     previews_signal = pyqtSignal(dict) 
 
     def __init__(self):
@@ -290,17 +323,19 @@ class CaptureEngine(QThread):
         img[:, :, 3] = 255 
         return img
 
-    def preprocess_image(self, crop, threshold, thickness):
+    def preprocess_image(self, crop, threshold_val, thickness_val):
         gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
-        if threshold == 0:
+        if threshold_val <= 1:
             _, processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         else:
-            _, processed = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+            thresh_calc = int(255 * (threshold_val / 10.0))
+            _, processed = cv2.threshold(gray, thresh_calc, 255, cv2.THRESH_BINARY)
             
-        if thickness != 0:
-            k_size = abs(thickness) + 1
+        thick_calc = thickness_val - 5
+        if thick_calc != 0:
+            k_size = abs(thick_calc) + 1
             kernel = np.ones((k_size, k_size), np.uint8)
-            if thickness > 0:
+            if thick_calc > 0:
                 processed = cv2.erode(processed, kernel, iterations=1)
             else:
                 processed = cv2.dilate(processed, kernel, iterations=1)
@@ -310,22 +345,47 @@ class CaptureEngine(QThread):
         self.running = True
         with mss.mss() as sct:
             cap = None
+            target_fps = 30.0 
+            video_start_time = 0
+            total_frames = 0
+
             while self.running:
+                loop_start = time.time() 
+
                 if self._new_source_requested:
                     if cap is not None: cap.release(); cap = None
                     self._new_source_requested = False
 
                 frame = None
 
+                # 1. VIDEO SOURCE
                 if self.source_type == "video" and self.source_path:
-                    if cap is None: cap = cv2.VideoCapture(self.source_path)
+                    if cap is None: 
+                        cap = cv2.VideoCapture(self.source_path)
+                        target_fps = cap.get(cv2.CAP_PROP_FPS)
+                        if target_fps <= 0 or np.isnan(target_fps): target_fps = 30.0
+                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        video_start_time = time.time()
+
+                    elapsed = time.time() - video_start_time
+                    target_frame = int(elapsed * target_fps)
+
+                    if target_frame >= total_frames and total_frames > 0:
+                        video_start_time = time.time()
+                        target_frame = 0
+
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
                     ret, v_frame = cap.read()
+                    
                     if not ret:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        video_start_time = time.time()
                         continue
                     frame = cv2.cvtColor(v_frame, cv2.COLOR_BGR2BGRA)
 
+                # 2. SCREEN SOURCE
                 elif self.source_type == "screen" and self.source_path:
+                    target_fps = 30.0 
                     try:
                         wins = gw.getWindowsWithTitle(self.source_path)
                         if wins and not wins[0].isMinimized:
@@ -337,12 +397,15 @@ class CaptureEngine(QThread):
                     except:
                         pass
 
+                # 3. PROCESS FRAME
                 if frame is not None:
                     self.frame_signal.emit(frame)
                     
                     previews = {}
                     fh, fw = frame.shape[:2]
                     for roi in self.active_rois:
+                        if not roi['is_on_scene']: continue # Skip fields not on scene
+
                         nx, ny, nw, nh = roi['rect']
                         x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
                         crop = frame[max(0, y):y+h, max(0, x):x+w]
@@ -353,25 +416,23 @@ class CaptureEngine(QThread):
 
                     if self.ocr_enabled:
                         self.ocr_counter += 1
-                        if self.ocr_counter >= 30: 
+                        if self.ocr_counter >= int(target_fps): 
                             
-                            start_time = time.time() # Start stopwatch
-                            
-                            json_payload = {
-                                "metadata": {},
-                                "data": {}
-                            }
-                            
+                            ocr_start_time = time.time() 
+                            extracted_data = {}
                             areas_scanned = 0
                             
-                            if not self.active_rois:
+                            # Only process fields physically placed on the scene
+                            scene_rois = [r for r in self.active_rois if r['is_on_scene']]
+
+                            if not scene_rois:
                                 gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
                                 text = pytesseract.image_to_string(gray).strip()
                                 if text: 
-                                    json_payload["data"]["Full_Screen"] = text
+                                    extracted_data["Full_Screen"] = text
                                     areas_scanned = 1
                             else:
-                                for roi in self.active_rois:
+                                for roi in scene_rois:
                                     if roi['id'] in previews:
                                         areas_scanned += 1
                                         processed = previews[roi['id']]
@@ -383,31 +444,36 @@ class CaptureEngine(QThread):
                                             
                                         data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
                                         words = []
+                                        req_conf = roi['confidence'] * 10 
                                         for i in range(len(data['text'])):
                                             conf = int(data['conf'][i])
                                             word = data['text'][i].strip()
-                                            if word and conf >= roi['confidence']:
+                                            if word and conf >= req_conf:
                                                 words.append(word)
                                                 
                                         text = " ".join(words)
                                         if text:
-                                            json_payload["data"][roi['name']] = text
+                                            # Use field Name. If empty, use ID.
+                                            safe_name = roi['name'] if roi['name'] else f"Field_{roi['id']}"
+                                            extracted_data[safe_name] = text
                             
-                            end_time = time.time() # End stopwatch
+                            ocr_end_time = time.time()
                             
-                            # Compile Metadata
-                            if json_payload["data"]:
-                                process_ms = int((end_time - start_time) * 1000)
-                                json_payload["metadata"] = {
-                                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                            if extracted_data:
+                                process_ms = int((ocr_end_time - ocr_start_time) * 1000)
+                                metadata = {
                                     "process_time_ms": process_ms,
                                     "areas_scanned": areas_scanned
                                 }
-                                self.ocr_signal.emit(json.dumps(json_payload, indent=4))
+                                self.ocr_signal.emit(metadata, extracted_data)
                             
                             self.ocr_counter = 0
                 
-                self.msleep(30)
+                # 4. DYNAMIC SLEEP
+                elapsed_time_ms = (time.time() - loop_start) * 1000
+                target_delay_ms = 1000.0 / target_fps
+                sleep_time = int(max(1, target_delay_ms - elapsed_time_ms))
+                self.msleep(sleep_time)
 
             if cap: cap.release()
 
@@ -418,15 +484,22 @@ class CaptureEngine(QThread):
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro OCR - Diagnostic Output")
+        self.setWindowTitle("Pro OCR Application")
         self.setMinimumSize(1400, 900)
-        self.setStyleSheet("QMainWindow { background-color: #1a1a1a; } QLabel { color: #eee; }")
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1e1e1e; } 
+            QLabel { color: #ccc; font-size: 12px; }
+            QPushButton { background-color: #383838; color: white; border-radius: 4px; padding: 6px; border: 1px solid #555; }
+            QPushButton:hover { background-color: #4a4a4a; }
+            QComboBox, QLineEdit { background-color: #2a2a2a; color: white; border: 1px solid #444; padding: 4px; border-radius: 3px; }
+        """)
         
         self.engine = CaptureEngine()
         self.engine.frame_signal.connect(self.update_preview)
         self.engine.ocr_signal.connect(self.update_ocr_text)
         self.engine.previews_signal.connect(self.update_roi_preview)
         
+        self.internal_update = False 
         self.init_ui()
         
         self.shortcut_reset = QShortcut(QKeySequence("Ctrl+R"), self)
@@ -435,24 +508,22 @@ class OCRApp(QMainWindow):
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- LEFT PANEL (Strictly Fixed Width, contains Tabs & Global Button) ---
+        # --- LEFT PANEL ---
         left_container = QWidget()
         left_container.setFixedWidth(420)
-        left_container.setStyleSheet("background-color: #1a1a1a; border-right: 2px solid #333;")
+        left_container.setStyleSheet("background-color: #242424; border-right: 1px solid #333;")
         left_master_layout = QVBoxLayout(left_container)
-        left_master_layout.setContentsMargins(10, 10, 10, 10)
+        left_master_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Tab Widget
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
-            QTabBar::tab { background: #2a2a2a; color: #aaa; padding: 10px; border: 1px solid #333; }
-            QTabBar::tab:selected { background: #3a3a3a; color: white; font-weight: bold; border-bottom: none; }
-            QTabWidget::pane { border: 1px solid #333; }
+            QTabBar::tab { background: #2a2a2a; color: #888; padding: 8px 15px; border: 1px solid #333; border-bottom: none; }
+            QTabBar::tab:selected { background: #3a3a3a; color: white; font-weight: bold; }
+            QTabWidget::pane { border: 1px solid #333; background: #2a2a2a; }
         """)
 
         # ----- TAB 1: CONFIGURATION -----
@@ -460,8 +531,7 @@ class OCRApp(QMainWindow):
         config_layout = QVBoxLayout(tab_config)
         config_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Source Selection
-        config_layout.addWidget(QLabel("<b>SOURCE SELECTION</b>"))
+        config_layout.addWidget(QLabel("<b>Source Selection</b>"))
         self.combo_source = QComboBox()
         self.combo_source.addItems(["Select Source", "Open a Video File", "Screen Capture"])
         self.combo_source.currentIndexChanged.connect(self.handle_source_change)
@@ -469,113 +539,170 @@ class OCRApp(QMainWindow):
 
         self.screen_widget = QWidget()
         screen_layout = QVBoxLayout(self.screen_widget)
-        screen_layout.setContentsMargins(0, 5, 0, 5)
-        screen_layout.addWidget(QLabel("<b>SELECT WINDOW</b>"))
+        screen_layout.setContentsMargins(0, 0, 0, 5)
         self.combo_windows = QComboBox()
         self.combo_windows.currentTextChanged.connect(self.handle_window_pick)
         screen_layout.addWidget(self.combo_windows)
         self.screen_widget.hide()
         config_layout.addWidget(self.screen_widget)
 
-        # Region Buttons
-        roi_buttons_layout = QHBoxLayout()
-        self.btn_add_roi = QPushButton("+ Add Area")
-        self.btn_add_roi.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; padding: 8px;")
-        roi_buttons_layout.addWidget(self.btn_add_roi)
-        self.btn_remove_roi = QPushButton("- Remove Selected")
-        self.btn_remove_roi.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; padding: 8px;")
-        roi_buttons_layout.addWidget(self.btn_remove_roi)
-        config_layout.addLayout(roi_buttons_layout)
-
-        # Fixed ROI Properties Panel
-        self.props_frame = QFrame()
-        self.props_frame.setStyleSheet("background-color: #2a2a2a; border-radius: 5px; padding: 5px; border: 1px solid #444;")
-        props_layout = QVBoxLayout(self.props_frame)
-        props_layout.addWidget(QLabel("<b>REGION PROPERTIES</b>"))
+        # OBS-STYLE TABLE AND BUTTONS (+ / -)
+        table_layout = QHBoxLayout()
         
-        props_layout.addWidget(QLabel("Region Name:"))
-        self.inp_name = QLineEdit()
-        self.inp_name.textChanged.connect(self.sync_properties)
-        props_layout.addWidget(self.inp_name)
+        self.roi_table = QTableWidget(0, 2)
+        self.roi_table.setHorizontalHeaderLabels(["Field", "Value"])
+        self.roi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.roi_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.roi_table.verticalHeader().setVisible(False)
+        self.roi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.roi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.roi_table.setFixedHeight(150)
+        self.roi_table.setStyleSheet("""
+            QTableWidget { background-color: #1e1e1e; color: white; border: 1px solid #444; gridline-color: #333; }
+            QHeaderView::section { background-color: #333; color: white; border: none; padding: 2px; }
+            QTableWidget::item:selected { background-color: #2980b9; }
+        """)
+        self.roi_table.itemSelectionChanged.connect(self.on_table_selection)
+        self.roi_table.itemChanged.connect(self.on_table_item_changed) # Hooks into double-click renaming
+        
+        table_layout.addWidget(self.roi_table)
 
-        props_layout.addWidget(QLabel("Text Type:"))
+        btn_layout = QVBoxLayout()
+        self.btn_add_roi = QPushButton("+")
+        self.btn_add_roi.setFixedSize(30, 30)
+        self.btn_remove_roi = QPushButton("-")
+        self.btn_remove_roi.setFixedSize(30, 30)
+        btn_layout.addWidget(self.btn_add_roi)
+        btn_layout.addWidget(self.btn_remove_roi)
+        btn_layout.addStretch()
+        
+        table_layout.addLayout(btn_layout)
+        config_layout.addLayout(table_layout)
+
+        # SCENE CONTROLS (Add to Scene / Remove Selected)
+        scene_btn_layout = QHBoxLayout()
+        self.btn_add_scene = QPushButton("Add to Scene ->")
+        self.btn_remove_scene = QPushButton("Remove Selected")
+        scene_btn_layout.addWidget(self.btn_add_scene)
+        scene_btn_layout.addWidget(self.btn_remove_scene)
+        config_layout.addLayout(scene_btn_layout)
+
+        # COMPACT PROPERTIES PANEL
+        self.props_frame = QFrame()
+        self.props_frame.setStyleSheet("QFrame { background-color: #2e2e2e; border-radius: 3px; border: 1px solid #444; margin-top: 10px; }")
+        props_main_layout = QVBoxLayout(self.props_frame)
+        props_main_layout.setContentsMargins(10, 10, 10, 10)
+        props_main_layout.setSpacing(8)
+        
+        # Target Header
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(QLabel("Target:"))
+        self.lbl_target = QLabel("Select an item above")
+        self.lbl_target.setStyleSheet("color: #00d2ff; font-weight: bold; border: none;")
+        header_layout.addWidget(self.lbl_target)
+        header_layout.addStretch()
+        header_layout.addWidget(QPushButton("Defaults"))
+        props_main_layout.addLayout(header_layout)
+
+        # Dense Grid Layout
+        grid = QGridLayout()
+        grid.setSpacing(10)
+
+        grid.addWidget(QLabel("Format"), 0, 0)
         self.combo_type = QComboBox()
         self.combo_type.addItems(["General Text", "Numbers Only", "Time Format"])
         self.combo_type.currentIndexChanged.connect(self.sync_properties)
-        props_layout.addWidget(self.combo_type)
+        grid.addWidget(self.combo_type, 0, 1)
 
-        self.lbl_thresh = QLabel("Binarization (Auto)")
-        props_layout.addWidget(self.lbl_thresh)
+        # Sliders
         self.sl_thresh = QSlider(Qt.Orientation.Horizontal)
-        self.sl_thresh.setRange(0, 255)
-        self.sl_thresh.valueChanged.connect(self.sync_properties)
-        props_layout.addWidget(self.sl_thresh)
-
-        self.lbl_thick = QLabel("Thickness (0)")
-        props_layout.addWidget(self.lbl_thick)
         self.sl_thick = QSlider(Qt.Orientation.Horizontal)
-        self.sl_thick.setRange(-3, 3)
-        self.sl_thick.setValue(0)
-        self.sl_thick.valueChanged.connect(self.sync_properties)
-        props_layout.addWidget(self.sl_thick)
-
-        self.lbl_conf = QLabel("Confidence Filter (60%)")
-        props_layout.addWidget(self.lbl_conf)
         self.sl_conf = QSlider(Qt.Orientation.Horizontal)
-        self.sl_conf.setRange(0, 100)
-        self.sl_conf.setValue(60)
-        self.sl_conf.valueChanged.connect(self.sync_properties)
-        props_layout.addWidget(self.sl_conf)
 
-        props_layout.addWidget(QLabel("<i>Live Processed Crop:</i>"))
-        self.lbl_crop_preview = QLabel("No Region Selected")
-        self.lbl_crop_preview.setFixedSize(360, 120) 
+        for sl in [self.sl_thresh, self.sl_thick, self.sl_conf]:
+            sl.setRange(1, 10)
+            sl.setTickPosition(QSlider.TickPosition.TicksBelow)
+            sl.setTickInterval(1)
+            sl.valueChanged.connect(self.sync_properties)
+            sl.setStyleSheet("QSlider::handle:horizontal { background: #888; width: 10px; border-radius: 5px; }")
+
+        grid.addWidget(QLabel("Binarize"), 1, 0)
+        grid.addWidget(self.sl_thresh, 1, 1)
+
+        grid.addWidget(QLabel("Cleanup/Dilate"), 2, 0)
+        grid.addWidget(self.sl_thick, 2, 1)
+
+        grid.addWidget(QLabel("Conf. Th"), 3, 0)
+        grid.addWidget(self.sl_conf, 3, 1)
+
+        props_main_layout.addLayout(grid)
+
+        self.lbl_crop_preview = QLabel()
+        self.lbl_crop_preview.setFixedSize(340, 60) 
         self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #555;")
         self.lbl_crop_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        props_layout.addWidget(self.lbl_crop_preview)
+        
+        preview_layout = QHBoxLayout()
+        preview_layout.addStretch()
+        preview_layout.addWidget(self.lbl_crop_preview)
+        preview_layout.addStretch()
+        props_main_layout.addLayout(preview_layout)
 
         config_layout.addWidget(self.props_frame)
-        
-        # Add a stretching spacer so elements stay pushed to the top
         config_layout.addStretch() 
 
         # ----- TAB 2: LIVE OUTPUT -----
         tab_output = QWidget()
         output_layout = QVBoxLayout(tab_output)
-        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setContentsMargins(8, 8, 8, 8)
         
+        self.meta_card = QFrame()
+        self.meta_card.setStyleSheet("background-color: #222; border-radius: 4px; border: 1px solid #444; padding: 4px;")
+        meta_layout = QHBoxLayout(self.meta_card)
+        
+        self.lbl_meta_ping = QLabel("Processing: -- ms")
+        self.lbl_meta_areas = QLabel("Scanned: 0")
+        
+        for lbl in [self.lbl_meta_ping, self.lbl_meta_areas]:
+            lbl.setStyleSheet("color: #aaa; font-weight: bold; font-size: 13px; border: none;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            meta_layout.addWidget(lbl)
+            
+        output_layout.addWidget(self.meta_card)
+
         self.ocr_output = QTextEdit()
         self.ocr_output.setReadOnly(True)
-        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: none; padding: 10px;")
+        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: 1px solid #333;")
         output_layout.addWidget(self.ocr_output)
 
-        # Add tabs to the widget
-        self.tabs.addTab(tab_config, "⚙️ Configuration")
-        self.tabs.addTab(tab_output, "📊 Live Data Output")
+        self.tabs.addTab(tab_config, "Configuration")
+        self.tabs.addTab(tab_output, "Live Data")
         
-        # Add tabs to the master left panel layout
         left_master_layout.addWidget(self.tabs)
 
-        # GLOBAL OCR START BUTTON (Always visible at the bottom)
         self.btn_ocr = QPushButton("START OCR DETECTION")
         self.btn_ocr.setCheckable(True)
-        self.btn_ocr.setFixedHeight(50)
-        self.btn_ocr.setStyleSheet("background-color: #333; color: white; font-weight: bold; border-radius: 5px;")
+        self.btn_ocr.setFixedHeight(45)
+        self.btn_ocr.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; font-size: 14px; border: none; border-radius: 4px;")
         self.btn_ocr.clicked.connect(self.toggle_ocr_logic)
         left_master_layout.addWidget(self.btn_ocr)
 
 
-        # --- RIGHT PANEL (Canvas) ---
+        # --- RIGHT PANEL ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll_area.setStyleSheet("background-color: #000;")
+        self.scroll_area.setStyleSheet("background-color: #000; border: none;")
         
         self.preview_overlay = ROIOverlayWidget(self.scroll_area)
         self.scroll_area.setWidget(self.preview_overlay)
         
-        self.btn_add_roi.clicked.connect(self.preview_overlay.add_roi)
-        self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_roi)
-        self.preview_overlay.rois_changed.connect(self.engine.update_rois)
+        # Connect Buttons to Overlay Engine
+        self.btn_add_roi.clicked.connect(self.preview_overlay.add_field)
+        self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_field)
+        self.btn_add_scene.clicked.connect(self.preview_overlay.add_to_scene)
+        self.btn_remove_scene.clicked.connect(self.preview_overlay.remove_from_scene)
+        
+        self.preview_overlay.rois_changed.connect(self.sync_table_to_rois)
         self.preview_overlay.roi_selected.connect(self.populate_properties_panel)
 
         layout.addWidget(left_container)
@@ -583,22 +710,67 @@ class OCRApp(QMainWindow):
 
         self.enable_properties_panel(False)
 
+    def on_table_item_changed(self, item):
+        """Fires when the user double clicks and renames a field in the table."""
+        if self.internal_update: return
+        
+        if item.column() == 0:
+            roi_id = item.data(Qt.ItemDataRole.UserRole)
+            new_name = item.text().strip()
+            
+            for roi in self.preview_overlay.rois:
+                if roi['id'] == roi_id:
+                    roi['name'] = new_name
+                    if self.preview_overlay.selected_id == roi_id:
+                        self.lbl_target.setText(new_name if new_name else "Unnamed Field")
+                    break
+                    
+            self.preview_overlay.update()
+            self.engine.update_rois(self.preview_overlay.rois)
+
+    def on_table_selection(self):
+        if self.internal_update: return
+        selected_items = self.roi_table.selectedItems()
+        if selected_items:
+            roi_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            self.preview_overlay.select_roi_by_id(roi_id)
+            self.populate_properties_panel(roi_id)
+
+    def sync_table_to_rois(self, rois):
+        self.internal_update = True
+        self.roi_table.setRowCount(len(rois))
+        
+        for i, roi in enumerate(rois):
+            # Editable Name Field
+            item_name = QTableWidgetItem(roi['name'])
+            item_name.setData(Qt.ItemDataRole.UserRole, roi['id'])
+            # Make sure it IS editable
+            item_name.setFlags(item_name.flags() | Qt.ItemFlag.ItemIsEditable)
+            
+            # Non-Editable Value Field
+            curr_val = self.roi_table.item(i, 1)
+            val_text = curr_val.text() if curr_val else ""
+            item_val = QTableWidgetItem(val_text)
+            item_val.setFlags(item_val.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            
+            self.roi_table.setItem(i, 0, item_name)
+            self.roi_table.setItem(i, 1, item_val)
+            
+            if roi['id'] == self.preview_overlay.selected_id:
+                self.roi_table.selectRow(i)
+                
+        self.internal_update = False
+        self.engine.update_rois(rois)
+
     def enable_properties_panel(self, enabled):
-        self.inp_name.setEnabled(enabled)
         self.combo_type.setEnabled(enabled)
         self.sl_thresh.setEnabled(enabled)
         self.sl_thick.setEnabled(enabled)
         self.sl_conf.setEnabled(enabled)
         
         if not enabled:
-            self.inp_name.blockSignals(True)
-            self.inp_name.clear()
-            self.inp_name.blockSignals(False)
+            self.lbl_target.setText("Select an item above")
             self.lbl_crop_preview.clear()
-            self.lbl_crop_preview.setText("No Region Selected")
-            self.lbl_thresh.setText("Binarization")
-            self.lbl_thick.setText("Thickness")
-            self.lbl_conf.setText("Confidence Filter")
 
     def handle_source_change(self, index):
         source = self.combo_source.currentText()
@@ -627,31 +799,35 @@ class OCRApp(QMainWindow):
     def populate_properties_panel(self, roi_id):
         if roi_id == -1:
             self.enable_properties_panel(False)
+            self.roi_table.clearSelection()
             return
             
         roi = next((r for r in self.preview_overlay.rois if r['id'] == roi_id), None)
         if roi:
             self.enable_properties_panel(True)
-            self.inp_name.blockSignals(True)
+            self.lbl_target.setText(roi['name'] if roi['name'] else "Unnamed Field")
+            
             self.combo_type.blockSignals(True)
             self.sl_thresh.blockSignals(True)
             self.sl_thick.blockSignals(True)
             self.sl_conf.blockSignals(True)
 
-            self.inp_name.setText(roi['name'])
             self.combo_type.setCurrentText(roi['type'])
             self.sl_thresh.setValue(roi['threshold'])
-            self.lbl_thresh.setText(f"Binarization ({'Auto' if roi['threshold']==0 else roi['threshold']})")
             self.sl_thick.setValue(roi['thickness'])
-            self.lbl_thick.setText(f"Thickness ({roi['thickness']})")
             self.sl_conf.setValue(roi['confidence'])
-            self.lbl_conf.setText(f"Confidence Filter ({roi['confidence']}%)")
 
-            self.inp_name.blockSignals(False)
             self.combo_type.blockSignals(False)
             self.sl_thresh.blockSignals(False)
             self.sl_thick.blockSignals(False)
             self.sl_conf.blockSignals(False)
+            
+            self.internal_update = True
+            for i in range(self.roi_table.rowCount()):
+                if self.roi_table.item(i, 0).data(Qt.ItemDataRole.UserRole) == roi_id:
+                    self.roi_table.selectRow(i)
+                    break
+            self.internal_update = False
 
     def sync_properties(self):
         roi_id = self.preview_overlay.selected_id
@@ -659,27 +835,20 @@ class OCRApp(QMainWindow):
         
         for roi in self.preview_overlay.rois:
             if roi['id'] == roi_id:
-                roi['name'] = self.inp_name.text()
                 roi['type'] = self.combo_type.currentText()
                 roi['threshold'] = self.sl_thresh.value()
                 roi['thickness'] = self.sl_thick.value()
                 roi['confidence'] = self.sl_conf.value()
-                
-                self.lbl_thresh.setText(f"Binarization ({'Auto' if roi['threshold']==0 else roi['threshold']})")
-                self.lbl_thick.setText(f"Thickness ({roi['thickness']})")
-                self.lbl_conf.setText(f"Confidence Filter ({roi['confidence']}%)")
                 break
                 
-        self.preview_overlay.update()
         self.engine.update_rois(self.preview_overlay.rois)
 
     def toggle_ocr_logic(self):
         state = self.btn_ocr.isChecked()
         self.engine.ocr_enabled = state
         self.btn_ocr.setText("STOP OCR DETECTION" if state else "START OCR DETECTION")
-        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#2ecc71'}; color: white; font-weight: bold; border-radius: 5px;")
+        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#2980b9'}; color: white; font-weight: bold; font-size: 14px; border: none; border-radius: 4px;")
         
-        # Auto-switch to the Output Tab when clicking Start
         if state:
             self.tabs.setCurrentIndex(1)
 
@@ -695,13 +864,27 @@ class OCRApp(QMainWindow):
             h, w = processed.shape
             q_img = QImage(processed.data, w, h, w, QImage.Format.Format_Grayscale8)
             pixmap = QPixmap.fromImage(q_img)
-            # Adjusted preview scale to fit the 360x120 fixed box
-            scaled = pixmap.scaled(350, 110, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled = pixmap.scaled(340, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.lbl_crop_preview.setPixmap(scaled)
 
-    def update_ocr_text(self, text):
-        self.ocr_output.append(f"{text}\n")
+    def update_ocr_text(self, metadata, data_dict):
+        self.lbl_meta_ping.setText(f"Processing: {metadata.get('process_time_ms', '--')} ms")
+        self.lbl_meta_areas.setText(f"Scanned: {metadata.get('areas_scanned', 0)}")
+        
+        formatted_json = json.dumps(data_dict, indent=4)
+        self.ocr_output.append(f"{formatted_json}\n")
         self.ocr_output.verticalScrollBar().setValue(self.ocr_output.verticalScrollBar().maximum())
+        
+        self.internal_update = True
+        for i in range(self.roi_table.rowCount()):
+            # The key in data_dict is the field name (or ID fallback)
+            field_name = self.roi_table.item(i, 0).text()
+            roi_id = self.roi_table.item(i, 0).data(Qt.ItemDataRole.UserRole)
+            safe_name = field_name if field_name else f"Field_{roi_id}"
+            
+            if safe_name in data_dict:
+                self.roi_table.item(i, 1).setText(data_dict[safe_name])
+        self.internal_update = False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
