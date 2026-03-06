@@ -91,7 +91,16 @@ class ROIOverlayWidget(QWidget):
         self.update()
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y()
+        # Capture both X and Y scroll data (fixes Alt/Shift horizontal hijacking)
+        delta_y = event.angleDelta().y()
+        delta_x = event.angleDelta().x()
+        
+        # Use whichever direction actually registered the scroll
+        delta = delta_y if delta_y != 0 else delta_x
+        
+        if delta == 0:
+            return  # Prevent infinite panning if delta is zero
+
         modifiers = event.modifiers()
 
         if modifiers == Qt.KeyboardModifier.ControlModifier:
