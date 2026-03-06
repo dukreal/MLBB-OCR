@@ -3,6 +3,8 @@ import sys
 import cv2
 import mss
 import json
+import time
+import datetime
 import numpy as np
 import pytesseract
 import pygetwindow as gw
@@ -10,7 +12,8 @@ import ctypes
 from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
-                             QComboBox, QFrame, QSplitter, QFileDialog, QScrollArea, QSlider, QLineEdit)
+                             QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
+                             QLineEdit, QTabWidget)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
 
@@ -351,14 +354,26 @@ class CaptureEngine(QThread):
                     if self.ocr_enabled:
                         self.ocr_counter += 1
                         if self.ocr_counter >= 30: 
-                            json_results = {}
+                            
+                            start_time = time.time() # Start stopwatch
+                            
+                            json_payload = {
+                                "metadata": {},
+                                "data": {}
+                            }
+                            
+                            areas_scanned = 0
+                            
                             if not self.active_rois:
                                 gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
                                 text = pytesseract.image_to_string(gray).strip()
-                                if text: json_results["Full_Screen"] = text
+                                if text: 
+                                    json_payload["data"]["Full_Screen"] = text
+                                    areas_scanned = 1
                             else:
                                 for roi in self.active_rois:
                                     if roi['id'] in previews:
+                                        areas_scanned += 1
                                         processed = previews[roi['id']]
                                         config = "--psm 6"
                                         if roi['type'] == 'Numbers Only':
@@ -376,10 +391,20 @@ class CaptureEngine(QThread):
                                                 
                                         text = " ".join(words)
                                         if text:
-                                            json_results[roi['name']] = text
+                                            json_payload["data"][roi['name']] = text
                             
-                            if json_results:
-                                self.ocr_signal.emit(json.dumps(json_results, indent=4))
+                            end_time = time.time() # End stopwatch
+                            
+                            # Compile Metadata
+                            if json_payload["data"]:
+                                process_ms = int((end_time - start_time) * 1000)
+                                json_payload["metadata"] = {
+                                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                                    "process_time_ms": process_ms,
+                                    "areas_scanned": areas_scanned
+                                }
+                                self.ocr_signal.emit(json.dumps(json_payload, indent=4))
+                            
                             self.ocr_counter = 0
                 
                 self.msleep(30)
@@ -393,7 +418,7 @@ class CaptureEngine(QThread):
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro OCR - Fixed Properties Panel")
+        self.setWindowTitle("Pro OCR - Diagnostic Output")
         self.setMinimumSize(1400, 900)
         self.setStyleSheet("QMainWindow { background-color: #1a1a1a; } QLabel { color: #eee; }")
         
@@ -411,27 +436,36 @@ class OCRApp(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         
-        # Replaced QSplitter with a standard QHBoxLayout to permanently lock the layout
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- LEFT PANEL (Strictly Fixed Width) ---
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFixedWidth(400) # Locks the entire left panel so it can't be resized
-        left_scroll.setStyleSheet("QScrollArea { border: none; border-right: 2px solid #333; }")
-        
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # --- LEFT PANEL (Strictly Fixed Width, contains Tabs & Global Button) ---
+        left_container = QWidget()
+        left_container.setFixedWidth(420)
+        left_container.setStyleSheet("background-color: #1a1a1a; border-right: 2px solid #333;")
+        left_master_layout = QVBoxLayout(left_container)
+        left_master_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Source
-        left_layout.addWidget(QLabel("<b>SOURCE SELECTION</b>"))
+        # Tab Widget
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabBar::tab { background: #2a2a2a; color: #aaa; padding: 10px; border: 1px solid #333; }
+            QTabBar::tab:selected { background: #3a3a3a; color: white; font-weight: bold; border-bottom: none; }
+            QTabWidget::pane { border: 1px solid #333; }
+        """)
+
+        # ----- TAB 1: CONFIGURATION -----
+        tab_config = QWidget()
+        config_layout = QVBoxLayout(tab_config)
+        config_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Source Selection
+        config_layout.addWidget(QLabel("<b>SOURCE SELECTION</b>"))
         self.combo_source = QComboBox()
         self.combo_source.addItems(["Select Source", "Open a Video File", "Screen Capture"])
         self.combo_source.currentIndexChanged.connect(self.handle_source_change)
-        left_layout.addWidget(self.combo_source)
+        config_layout.addWidget(self.combo_source)
 
         self.screen_widget = QWidget()
         screen_layout = QVBoxLayout(self.screen_widget)
@@ -441,7 +475,7 @@ class OCRApp(QMainWindow):
         self.combo_windows.currentTextChanged.connect(self.handle_window_pick)
         screen_layout.addWidget(self.combo_windows)
         self.screen_widget.hide()
-        left_layout.addWidget(self.screen_widget)
+        config_layout.addWidget(self.screen_widget)
 
         # Region Buttons
         roi_buttons_layout = QHBoxLayout()
@@ -451,11 +485,11 @@ class OCRApp(QMainWindow):
         self.btn_remove_roi = QPushButton("- Remove Selected")
         self.btn_remove_roi.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; padding: 8px;")
         roi_buttons_layout.addWidget(self.btn_remove_roi)
-        left_layout.addLayout(roi_buttons_layout)
+        config_layout.addLayout(roi_buttons_layout)
 
-        # --- FIXED ROI PROPERTIES PANEL ---
+        # Fixed ROI Properties Panel
         self.props_frame = QFrame()
-        self.props_frame.setStyleSheet("background-color: #2a2a2a; border-radius: 5px; padding: 5px;")
+        self.props_frame.setStyleSheet("background-color: #2a2a2a; border-radius: 5px; padding: 5px; border: 1px solid #444;")
         props_layout = QVBoxLayout(self.props_frame)
         props_layout.addWidget(QLabel("<b>REGION PROPERTIES</b>"))
         
@@ -495,35 +529,43 @@ class OCRApp(QMainWindow):
 
         props_layout.addWidget(QLabel("<i>Live Processed Crop:</i>"))
         self.lbl_crop_preview = QLabel("No Region Selected")
-        
-        # IMPORTANT FIX: Lock the height of the preview image so it doesn't push the layout
-        self.lbl_crop_preview.setFixedHeight(120) 
+        self.lbl_crop_preview.setFixedSize(360, 120) 
         self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #555;")
         self.lbl_crop_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         props_layout.addWidget(self.lbl_crop_preview)
 
-        left_layout.addWidget(self.props_frame)
+        config_layout.addWidget(self.props_frame)
         
-        # Disable properties by default
-        self.enable_properties_panel(False)
+        # Add a stretching spacer so elements stay pushed to the top
+        config_layout.addStretch() 
 
-        # OCR Output
+        # ----- TAB 2: LIVE OUTPUT -----
+        tab_output = QWidget()
+        output_layout = QVBoxLayout(tab_output)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.ocr_output = QTextEdit()
+        self.ocr_output.setReadOnly(True)
+        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: none; padding: 10px;")
+        output_layout.addWidget(self.ocr_output)
+
+        # Add tabs to the widget
+        self.tabs.addTab(tab_config, "⚙️ Configuration")
+        self.tabs.addTab(tab_output, "📊 Live Data Output")
+        
+        # Add tabs to the master left panel layout
+        left_master_layout.addWidget(self.tabs)
+
+        # GLOBAL OCR START BUTTON (Always visible at the bottom)
         self.btn_ocr = QPushButton("START OCR DETECTION")
         self.btn_ocr.setCheckable(True)
         self.btn_ocr.setFixedHeight(50)
-        self.btn_ocr.setStyleSheet("background-color: #333; color: white; font-weight: bold; margin-top: 15px;")
+        self.btn_ocr.setStyleSheet("background-color: #333; color: white; font-weight: bold; border-radius: 5px;")
         self.btn_ocr.clicked.connect(self.toggle_ocr_logic)
-        left_layout.addWidget(self.btn_ocr)
+        left_master_layout.addWidget(self.btn_ocr)
 
-        left_layout.addWidget(QLabel("<b>JSON OUTPUT</b>"))
-        self.ocr_output = QTextEdit()
-        self.ocr_output.setReadOnly(True)
-        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: 1px solid #333;")
-        left_layout.addWidget(self.ocr_output)
 
-        left_scroll.setWidget(left_panel)
-
-        # --- RIGHT PANEL ---
+        # --- RIGHT PANEL (Canvas) ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_area.setStyleSheet("background-color: #000;")
@@ -536,12 +578,12 @@ class OCRApp(QMainWindow):
         self.preview_overlay.rois_changed.connect(self.engine.update_rois)
         self.preview_overlay.roi_selected.connect(self.populate_properties_panel)
 
-        # Add to standard layout instead of a Splitter
-        layout.addWidget(left_scroll)
-        layout.addWidget(self.scroll_area, stretch=1) # Stretch=1 ensures the right side takes all remaining space
+        layout.addWidget(left_container)
+        layout.addWidget(self.scroll_area, stretch=1)
+
+        self.enable_properties_panel(False)
 
     def enable_properties_panel(self, enabled):
-        """Grays out or enables the properties panel without hiding it."""
         self.inp_name.setEnabled(enabled)
         self.combo_type.setEnabled(enabled)
         self.sl_thresh.setEnabled(enabled)
@@ -590,7 +632,6 @@ class OCRApp(QMainWindow):
         roi = next((r for r in self.preview_overlay.rois if r['id'] == roi_id), None)
         if roi:
             self.enable_properties_panel(True)
-            
             self.inp_name.blockSignals(True)
             self.combo_type.blockSignals(True)
             self.sl_thresh.blockSignals(True)
@@ -599,13 +640,10 @@ class OCRApp(QMainWindow):
 
             self.inp_name.setText(roi['name'])
             self.combo_type.setCurrentText(roi['type'])
-            
             self.sl_thresh.setValue(roi['threshold'])
             self.lbl_thresh.setText(f"Binarization ({'Auto' if roi['threshold']==0 else roi['threshold']})")
-            
             self.sl_thick.setValue(roi['thickness'])
             self.lbl_thick.setText(f"Thickness ({roi['thickness']})")
-            
             self.sl_conf.setValue(roi['confidence'])
             self.lbl_conf.setText(f"Confidence Filter ({roi['confidence']}%)")
 
@@ -639,7 +677,11 @@ class OCRApp(QMainWindow):
         state = self.btn_ocr.isChecked()
         self.engine.ocr_enabled = state
         self.btn_ocr.setText("STOP OCR DETECTION" if state else "START OCR DETECTION")
-        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#333'}; color: white; font-weight: bold; margin-top: 15px;")
+        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#2ecc71'}; color: white; font-weight: bold; border-radius: 5px;")
+        
+        # Auto-switch to the Output Tab when clicking Start
+        if state:
+            self.tabs.setCurrentIndex(1)
 
     def update_preview(self, frame):
         h, w, c = frame.shape
@@ -653,7 +695,8 @@ class OCRApp(QMainWindow):
             h, w = processed.shape
             q_img = QImage(processed.data, w, h, w, QImage.Format.Format_Grayscale8)
             pixmap = QPixmap.fromImage(q_img)
-            scaled = pixmap.scaled(self.lbl_crop_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            # Adjusted preview scale to fit the 360x120 fixed box
+            scaled = pixmap.scaled(350, 110, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.lbl_crop_preview.setPixmap(scaled)
 
     def update_ocr_text(self, text):
