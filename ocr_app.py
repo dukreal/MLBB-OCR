@@ -10,7 +10,7 @@ import ctypes
 from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
-                             QComboBox, QFrame, QSplitter, QFileDialog, QScrollArea)
+                             QComboBox, QFrame, QSplitter, QFileDialog, QScrollArea, QSlider, QLineEdit)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
 
@@ -38,8 +38,8 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
 
 class ROIOverlayWidget(QWidget):
-    """Custom Widget that resizes dynamically inside a QScrollArea."""
     rois_changed = pyqtSignal(list)
+    roi_selected = pyqtSignal(int) 
 
     def __init__(self, scroll_area):
         super().__init__()
@@ -47,16 +47,12 @@ class ROIOverlayWidget(QWidget):
         self.current_pixmap = QPixmap()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) 
         
-        # Viewport Settings
         self.zoom_factor = 1.0
         self.is_new_source = True
         
-        # ROI Data
         self.rois = []  
         self.area_counter = 1
         self.selected_id = None
-        
-        # Interaction States
         self.drag_state = None
         self.last_mouse_pos = None
 
@@ -64,12 +60,17 @@ class ROIOverlayWidget(QWidget):
         self.rois.append({
             'id': self.area_counter,
             'name': f'Area_{self.area_counter}',
-            'rect': [0.4, 0.4, 0.2, 0.2]  # Normalized coordinates (0.0 to 1.0)
+            'rect': [0.4, 0.4, 0.2, 0.2],
+            'type': 'General Text',
+            'threshold': 0, 
+            'thickness': 0, 
+            'confidence': 60 
         })
         self.selected_id = self.area_counter
         self.area_counter += 1
         self.update()
         self.rois_changed.emit(self.rois)
+        self.roi_selected.emit(self.selected_id)
 
     def remove_selected_roi(self):
         if self.selected_id is not None:
@@ -77,6 +78,7 @@ class ROIOverlayWidget(QWidget):
             self.selected_id = None
             self.update()
             self.rois_changed.emit(self.rois)
+            self.roi_selected.emit(-1)
 
     def set_frame(self, pixmap):
         self.current_pixmap = pixmap
@@ -88,30 +90,25 @@ class ROIOverlayWidget(QWidget):
         self.update() 
 
     def update_size(self):
-        """Dynamically resize the widget so QScrollArea updates its scrollbars."""
         if self.current_pixmap.isNull(): return
         new_w = int(self.current_pixmap.width() * self.zoom_factor)
         new_h = int(self.current_pixmap.height() * self.zoom_factor)
-        
         if self.width() != new_w or self.height() != new_h:
             self.setFixedSize(new_w, new_h)
 
     def fit_to_view(self):
-        """Calculates default zoom to perfectly fit the screen layout."""
         if self.current_pixmap.isNull(): return
         vw = self.scroll_area.viewport().width()
         vh = self.scroll_area.viewport().height()
         pw = self.current_pixmap.width()
         ph = self.current_pixmap.height()
-        
         if pw > 0 and ph > 0:
             scale_w = vw / pw
             scale_h = vh / ph
-            self.zoom_factor = min(scale_w, scale_h) * 0.95 # Leave a 5% margin
+            self.zoom_factor = min(scale_w, scale_h) * 0.95 
             self.update_size()
 
     def reset_view(self):
-        """Triggered by Ctrl+R"""
         self.fit_to_view()
 
     def wheelEvent(self, event):
@@ -121,47 +118,33 @@ class ROIOverlayWidget(QWidget):
         if delta == 0: return
 
         modifiers = event.modifiers()
-
         if modifiers == Qt.KeyboardModifier.ControlModifier:
-            # Zoom In/Out
             if delta > 0: self.zoom_factor *= 1.15
             else: self.zoom_factor *= 0.85
             self.zoom_factor = max(0.2, min(self.zoom_factor, 10.0))
             self.update_size()
             event.accept()
-            
         elif modifiers == Qt.KeyboardModifier.AltModifier:
-            # Pan Left/Right
             hbar = self.scroll_area.horizontalScrollBar()
             hbar.setValue(hbar.value() - int(delta / 2))
             event.accept()
-            
         else:
-            # Normal Mouse Scroll Up/Down
             vbar = self.scroll_area.verticalScrollBar()
             vbar.setValue(vbar.value() - int(delta / 2))
             event.accept()
 
     def paintEvent(self, event):
         if self.current_pixmap.isNull(): return
-            
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         w, h = self.width(), self.height()
-        
-        # 1. Draw scaled image filling this custom widget
         painter.drawPixmap(0, 0, w, h, self.current_pixmap)
 
-        # 2. Draw ROIs mapping exactly to widget size
         for roi in self.rois:
             nx, ny, nw, nh = roi['rect']
-            rx = int(nx * w)
-            ry = int(ny * h)
-            rw = int(nw * w)
-            rh = int(nh * h)
-
+            rx, ry, rw, rh = int(nx * w), int(ny * h), int(nw * w), int(nh * h)
             is_selected = (roi['id'] == self.selected_id)
 
             if is_selected:
@@ -172,17 +155,12 @@ class ROIOverlayWidget(QWidget):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
 
             painter.drawRect(rx, ry, rw, rh)
-
-            # Name Tag Background
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(rx, ry - 20, 80, 20)
-
-            # Name Tag Text
+            painter.drawRect(rx, ry - 20, max(80, len(roi['name'])*8), 20)
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(rx + 5, ry - 5, roi['name'])
 
-            # Draw "Resize Handle"
             if is_selected:
                 painter.setBrush(QColor(0, 255, 0))
                 painter.drawRect(rx + rw - 12, ry + rh - 12, 12, 12)
@@ -212,15 +190,18 @@ class ROIOverlayWidget(QWidget):
                 clicked_roi = roi
                 break
                 
-        if not clicked_roi: self.selected_id = None
+        if not clicked_roi: 
+            self.selected_id = None
+            self.roi_selected.emit(-1)
+        else:
+            self.roi_selected.emit(self.selected_id)
+            
         self.update()
 
     def mouseMoveEvent(self, event):
         if self.selected_id is None or self.drag_state is None: return
-            
         mx, my = event.pos().x(), event.pos().y()
-        dx = mx - self.last_mouse_pos[0]
-        dy = my - self.last_mouse_pos[1]
+        dx, dy = mx - self.last_mouse_pos[0], my - self.last_mouse_pos[1]
         self.last_mouse_pos = (mx, my)
         
         dnx, dny = dx / self.width(), dy / self.height()
@@ -233,8 +214,8 @@ class ROIOverlayWidget(QWidget):
                     ny = max(0.0, min(ny + dny, 1.0 - nh))
                     roi['rect'] = [nx, ny, nw, nh]
                 elif self.drag_state == 'resize':
-                    nw = max(0.05, min(nw + dnx, 1.0 - nx)) 
-                    nh = max(0.05, min(nh + dny, 1.0 - ny)) 
+                    nw = max(0.02, min(nw + dnx, 1.0 - nx)) 
+                    nh = max(0.02, min(nh + dny, 1.0 - ny)) 
                     roi['rect'] = [nx, ny, nw, nh]
                 break
                 
@@ -249,6 +230,7 @@ class ROIOverlayWidget(QWidget):
 class CaptureEngine(QThread):
     frame_signal = pyqtSignal(np.ndarray)
     ocr_signal = pyqtSignal(str)
+    previews_signal = pyqtSignal(dict) 
 
     def __init__(self):
         super().__init__()
@@ -305,6 +287,22 @@ class CaptureEngine(QThread):
         img[:, :, 3] = 255 
         return img
 
+    def preprocess_image(self, crop, threshold, thickness):
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
+        if threshold == 0:
+            _, processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        else:
+            _, processed = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+            
+        if thickness != 0:
+            k_size = abs(thickness) + 1
+            kernel = np.ones((k_size, k_size), np.uint8)
+            if thickness > 0:
+                processed = cv2.erode(processed, kernel, iterations=1)
+            else:
+                processed = cv2.dilate(processed, kernel, iterations=1)
+        return processed
+
     def run(self):
         self.running = True
         with mss.mss() as sct:
@@ -339,6 +337,17 @@ class CaptureEngine(QThread):
                 if frame is not None:
                     self.frame_signal.emit(frame)
                     
+                    previews = {}
+                    fh, fw = frame.shape[:2]
+                    for roi in self.active_rois:
+                        nx, ny, nw, nh = roi['rect']
+                        x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
+                        crop = frame[max(0, y):y+h, max(0, x):x+w]
+                        if crop.size > 0:
+                            processed = self.preprocess_image(crop, roi['threshold'], roi['thickness'])
+                            previews[roi['id']] = processed
+                    self.previews_signal.emit(previews)
+
                     if self.ocr_enabled:
                         self.ocr_counter += 1
                         if self.ocr_counter >= 30: 
@@ -348,15 +357,26 @@ class CaptureEngine(QThread):
                                 text = pytesseract.image_to_string(gray).strip()
                                 if text: json_results["Full_Screen"] = text
                             else:
-                                fh, fw = frame.shape[:2]
                                 for roi in self.active_rois:
-                                    nx, ny, nw, nh = roi['rect']
-                                    x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
-                                    crop = frame[y:y+h, x:x+w]
-                                    if crop.size > 0:
-                                        gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
-                                        text = pytesseract.image_to_string(gray).strip()
-                                        json_results[roi['name']] = text
+                                    if roi['id'] in previews:
+                                        processed = previews[roi['id']]
+                                        config = "--psm 6"
+                                        if roi['type'] == 'Numbers Only':
+                                            config = "-c tessedit_char_whitelist=0123456789 --psm 6"
+                                        elif roi['type'] == 'Time Format':
+                                            config = "-c tessedit_char_whitelist=0123456789:. --psm 6"
+                                            
+                                        data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
+                                        words = []
+                                        for i in range(len(data['text'])):
+                                            conf = int(data['conf'][i])
+                                            word = data['text'][i].strip()
+                                            if word and conf >= roi['confidence']:
+                                                words.append(word)
+                                                
+                                        text = " ".join(words)
+                                        if text:
+                                            json_results[roi['name']] = text
                             
                             if json_results:
                                 self.ocr_signal.emit(json.dumps(json_results, indent=4))
@@ -369,20 +389,21 @@ class CaptureEngine(QThread):
     def stop(self):
         self.running = False
 
+
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro OCR - Scrollbars & Zoom")
-        self.setMinimumSize(1300, 850)
+        self.setWindowTitle("Pro OCR - Fixed Properties Panel")
+        self.setMinimumSize(1400, 900)
         self.setStyleSheet("QMainWindow { background-color: #1a1a1a; } QLabel { color: #eee; }")
         
         self.engine = CaptureEngine()
         self.engine.frame_signal.connect(self.update_preview)
         self.engine.ocr_signal.connect(self.update_ocr_text)
+        self.engine.previews_signal.connect(self.update_roi_preview)
         
         self.init_ui()
         
-        # --- Keyboard Shortcuts ---
         self.shortcut_reset = QShortcut(QKeySequence("Ctrl+R"), self)
         self.shortcut_reset.activated.connect(self.preview_overlay.reset_view)
 
@@ -393,9 +414,14 @@ class OCRApp(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- LEFT PANEL ---
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setStyleSheet("QScrollArea { border: none; }")
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
+        left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        # Source
         left_layout.addWidget(QLabel("<b>SOURCE SELECTION</b>"))
         self.combo_source = QComboBox()
         self.combo_source.addItems(["Select Source", "Open a Video File", "Screen Capture"])
@@ -412,19 +438,69 @@ class OCRApp(QMainWindow):
         self.screen_widget.hide()
         left_layout.addWidget(self.screen_widget)
 
-        left_layout.addWidget(QLabel("<b>REGION CONTROLS</b><br><small>Mouse=Up/Down | Alt+Mouse=Left/Right<br>Ctrl+Mouse=Zoom | Ctrl+R=Reset</small>"))
+        # Region Buttons
         roi_buttons_layout = QHBoxLayout()
-        
         self.btn_add_roi = QPushButton("+ Add Area")
         self.btn_add_roi.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; padding: 8px;")
         roi_buttons_layout.addWidget(self.btn_add_roi)
-        
         self.btn_remove_roi = QPushButton("- Remove Selected")
         self.btn_remove_roi.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; padding: 8px;")
         roi_buttons_layout.addWidget(self.btn_remove_roi)
-        
         left_layout.addLayout(roi_buttons_layout)
 
+        # --- FIXED ROI PROPERTIES PANEL ---
+        self.props_frame = QFrame()
+        self.props_frame.setStyleSheet("background-color: #2a2a2a; border-radius: 5px; padding: 5px;")
+        props_layout = QVBoxLayout(self.props_frame)
+        props_layout.addWidget(QLabel("<b>REGION PROPERTIES</b>"))
+        
+        props_layout.addWidget(QLabel("Region Name:"))
+        self.inp_name = QLineEdit()
+        self.inp_name.textChanged.connect(self.sync_properties)
+        props_layout.addWidget(self.inp_name)
+
+        props_layout.addWidget(QLabel("Text Type:"))
+        self.combo_type = QComboBox()
+        self.combo_type.addItems(["General Text", "Numbers Only", "Time Format"])
+        self.combo_type.currentIndexChanged.connect(self.sync_properties)
+        props_layout.addWidget(self.combo_type)
+
+        self.lbl_thresh = QLabel("Binarization (Auto)")
+        props_layout.addWidget(self.lbl_thresh)
+        self.sl_thresh = QSlider(Qt.Orientation.Horizontal)
+        self.sl_thresh.setRange(0, 255)
+        self.sl_thresh.valueChanged.connect(self.sync_properties)
+        props_layout.addWidget(self.sl_thresh)
+
+        self.lbl_thick = QLabel("Thickness (0)")
+        props_layout.addWidget(self.lbl_thick)
+        self.sl_thick = QSlider(Qt.Orientation.Horizontal)
+        self.sl_thick.setRange(-3, 3)
+        self.sl_thick.setValue(0)
+        self.sl_thick.valueChanged.connect(self.sync_properties)
+        props_layout.addWidget(self.sl_thick)
+
+        self.lbl_conf = QLabel("Confidence Filter (60%)")
+        props_layout.addWidget(self.lbl_conf)
+        self.sl_conf = QSlider(Qt.Orientation.Horizontal)
+        self.sl_conf.setRange(0, 100)
+        self.sl_conf.setValue(60)
+        self.sl_conf.valueChanged.connect(self.sync_properties)
+        props_layout.addWidget(self.sl_conf)
+
+        props_layout.addWidget(QLabel("<i>Live Processed Crop:</i>"))
+        self.lbl_crop_preview = QLabel("No Region Selected")
+        self.lbl_crop_preview.setMinimumHeight(60)
+        self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #555;")
+        self.lbl_crop_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        props_layout.addWidget(self.lbl_crop_preview)
+
+        left_layout.addWidget(self.props_frame)
+        
+        # Disable properties by default
+        self.enable_properties_panel(False)
+
+        # OCR Output
         self.btn_ocr = QPushButton("START OCR DETECTION")
         self.btn_ocr.setCheckable(True)
         self.btn_ocr.setFixedHeight(50)
@@ -438,7 +514,9 @@ class OCRApp(QMainWindow):
         self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: 1px solid #333;")
         left_layout.addWidget(self.ocr_output)
 
-        # --- RIGHT PANEL (Scroll Area) ---
+        left_scroll.setWidget(left_panel)
+
+        # --- RIGHT PANEL ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_area.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
@@ -449,23 +527,40 @@ class OCRApp(QMainWindow):
         self.btn_add_roi.clicked.connect(self.preview_overlay.add_roi)
         self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_roi)
         self.preview_overlay.rois_changed.connect(self.engine.update_rois)
+        self.preview_overlay.roi_selected.connect(self.populate_properties_panel)
 
-        splitter.addWidget(left_panel)
+        splitter.addWidget(left_scroll)
         splitter.addWidget(self.scroll_area)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter)
 
+    def enable_properties_panel(self, enabled):
+        """Grays out or enables the properties panel without hiding it."""
+        self.inp_name.setEnabled(enabled)
+        self.combo_type.setEnabled(enabled)
+        self.sl_thresh.setEnabled(enabled)
+        self.sl_thick.setEnabled(enabled)
+        self.sl_conf.setEnabled(enabled)
+        
+        if not enabled:
+            self.inp_name.blockSignals(True)
+            self.inp_name.clear()
+            self.inp_name.blockSignals(False)
+            self.lbl_crop_preview.clear()
+            self.lbl_crop_preview.setText("No Region Selected")
+            self.lbl_thresh.setText("Binarization")
+            self.lbl_thick.setText("Thickness")
+            self.lbl_conf.setText("Confidence Filter")
+
     def handle_source_change(self, index):
         source = self.combo_source.currentText()
         self.screen_widget.hide()
-
         if source == "Open a Video File":
             path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Video Files (*.mp4 *.avi *.mkv)")
             if path:
                 self.preview_overlay.is_new_source = True
                 self.engine.set_source_video(path)
                 if not self.engine.isRunning(): self.engine.start()
-
         elif source == "Screen Capture":
             self.screen_widget.show()
             self.refresh_window_list()
@@ -481,6 +576,59 @@ class OCRApp(QMainWindow):
             self.engine.set_source_screen(title)
             if not self.engine.isRunning(): self.engine.start()
 
+    def populate_properties_panel(self, roi_id):
+        if roi_id == -1:
+            self.enable_properties_panel(False)
+            return
+            
+        roi = next((r for r in self.preview_overlay.rois if r['id'] == roi_id), None)
+        if roi:
+            self.enable_properties_panel(True)
+            
+            self.inp_name.blockSignals(True)
+            self.combo_type.blockSignals(True)
+            self.sl_thresh.blockSignals(True)
+            self.sl_thick.blockSignals(True)
+            self.sl_conf.blockSignals(True)
+
+            self.inp_name.setText(roi['name'])
+            self.combo_type.setCurrentText(roi['type'])
+            
+            self.sl_thresh.setValue(roi['threshold'])
+            self.lbl_thresh.setText(f"Binarization ({'Auto' if roi['threshold']==0 else roi['threshold']})")
+            
+            self.sl_thick.setValue(roi['thickness'])
+            self.lbl_thick.setText(f"Thickness ({roi['thickness']})")
+            
+            self.sl_conf.setValue(roi['confidence'])
+            self.lbl_conf.setText(f"Confidence Filter ({roi['confidence']}%)")
+
+            self.inp_name.blockSignals(False)
+            self.combo_type.blockSignals(False)
+            self.sl_thresh.blockSignals(False)
+            self.sl_thick.blockSignals(False)
+            self.sl_conf.blockSignals(False)
+
+    def sync_properties(self):
+        roi_id = self.preview_overlay.selected_id
+        if roi_id is None: return
+        
+        for roi in self.preview_overlay.rois:
+            if roi['id'] == roi_id:
+                roi['name'] = self.inp_name.text()
+                roi['type'] = self.combo_type.currentText()
+                roi['threshold'] = self.sl_thresh.value()
+                roi['thickness'] = self.sl_thick.value()
+                roi['confidence'] = self.sl_conf.value()
+                
+                self.lbl_thresh.setText(f"Binarization ({'Auto' if roi['threshold']==0 else roi['threshold']})")
+                self.lbl_thick.setText(f"Thickness ({roi['thickness']})")
+                self.lbl_conf.setText(f"Confidence Filter ({roi['confidence']}%)")
+                break
+                
+        self.preview_overlay.update()
+        self.engine.update_rois(self.preview_overlay.rois)
+
     def toggle_ocr_logic(self):
         state = self.btn_ocr.isChecked()
         self.engine.ocr_enabled = state
@@ -491,6 +639,16 @@ class OCRApp(QMainWindow):
         h, w, c = frame.shape
         q_img = QImage(frame.data, w, h, w*c, QImage.Format.Format_RGBA8888).rgbSwapped()
         self.preview_overlay.set_frame(QPixmap.fromImage(q_img))
+
+    def update_roi_preview(self, previews_dict):
+        roi_id = self.preview_overlay.selected_id
+        if roi_id is not None and roi_id in previews_dict:
+            processed = previews_dict[roi_id]
+            h, w = processed.shape
+            q_img = QImage(processed.data, w, h, w, QImage.Format.Format_Grayscale8)
+            pixmap = QPixmap.fromImage(q_img)
+            scaled = pixmap.scaled(self.lbl_crop_preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.lbl_crop_preview.setPixmap(scaled)
 
     def update_ocr_text(self, text):
         self.ocr_output.append(f"{text}\n")
