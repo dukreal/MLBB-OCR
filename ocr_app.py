@@ -1,11 +1,8 @@
 import os
-# Set DPI awareness before any imports to ensure sharp scaling
-os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
-
 import sys
 import cv2
 import mss
+import json
 import numpy as np
 import pytesseract
 import pygetwindow as gw
@@ -14,15 +11,18 @@ from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QComboBox, QFrame, QSplitter, QFileDialog)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+
+# --- DPI Scaling Fixes ---
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
 
 # ==========================================================
 # SET YOUR TESSERACT PATH HERE
 # ==========================================================
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Windows Native GDI/User32 bindings for TRUE Window Capture
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 
@@ -37,6 +37,171 @@ class BITMAPINFOHEADER(ctypes.Structure):
 class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
 
+class ROIOverlayWidget(QWidget):
+    """Custom Widget to draw the video feed and handle interactive ROI boxes."""
+    rois_changed = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__()
+        self.current_pixmap = QPixmap()
+        self.pixmap_rect = QRect()
+        
+        # ROI Data
+        self.rois = []  # List of dicts: {'id': int, 'name': str, 'rect': [nx, ny, nw, nh]}
+        self.area_counter = 1
+        self.selected_id = None
+        
+        # Interaction States
+        self.drag_state = None
+        self.last_mouse_pos = None
+
+    def add_roi(self):
+        # Spawns a box taking up 20% of the screen in the center
+        self.rois.append({
+            'id': self.area_counter,
+            'name': f'Area_{self.area_counter}',
+            'rect': [0.4, 0.4, 0.2, 0.2]  # Normalized coords (0.0 to 1.0)
+        })
+        self.selected_id = self.area_counter
+        self.area_counter += 1
+        self.update()
+        self.rois_changed.emit(self.rois)
+
+    def remove_selected_roi(self):
+        if self.selected_id is not None:
+            self.rois = [r for r in self.rois if r['id'] != self.selected_id]
+            self.selected_id = None
+            self.update()
+            self.rois_changed.emit(self.rois)
+
+    def set_frame(self, pixmap):
+        self.current_pixmap = pixmap
+        self.update() # Trigger a repaint
+
+    def paintEvent(self, event):
+        if self.current_pixmap.isNull():
+            return
+            
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 1. Draw the Video Frame (Scaled to fit)
+        scaled = self.current_pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        x_offset = (self.width() - scaled.width()) // 2
+        y_offset = (self.height() - scaled.height()) // 2
+        self.pixmap_rect = QRect(x_offset, y_offset, scaled.width(), scaled.height())
+        
+        painter.drawPixmap(x_offset, y_offset, scaled)
+
+        # 2. Draw the ROI Boxes
+        for roi in self.rois:
+            nx, ny, nw, nh = roi['rect']
+            # Convert normalized coordinates back to actual widget pixels
+            rx = int(x_offset + nx * scaled.width())
+            ry = int(y_offset + ny * scaled.height())
+            rw = int(nw * scaled.width())
+            rh = int(nh * scaled.height())
+
+            is_selected = (roi['id'] == self.selected_id)
+
+            # Box Styling
+            if is_selected:
+                painter.setPen(QPen(QColor(0, 255, 0), 3))
+                painter.setBrush(QColor(0, 255, 0, 40)) # Light green tint
+            else:
+                painter.setPen(QPen(QColor(255, 50, 50), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            painter.drawRect(rx, ry, rw, rh)
+
+            # Name Tag Background
+            painter.setBrush(QColor(0, 0, 0, 180))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(rx, ry - 20, 80, 20)
+
+            # Name Tag Text
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(rx + 5, ry - 5, roi['name'])
+
+            # Draw "Resize Handle" if selected
+            if is_selected:
+                painter.setBrush(QColor(0, 255, 0))
+                painter.drawRect(rx + rw - 12, ry + rh - 12, 12, 12)
+
+    def mousePressEvent(self, event):
+        if self.pixmap_rect.isNull() or not self.pixmap_rect.contains(event.pos()):
+            self.selected_id = None
+            self.update()
+            return
+            
+        mx, my = event.pos().x(), event.pos().y()
+        px, py, pw, ph = self.pixmap_rect.x(), self.pixmap_rect.y(), self.pixmap_rect.width(), self.pixmap_rect.height()
+        
+        # Check hit detection from top-most box to bottom-most
+        clicked_roi = None
+        for roi in reversed(self.rois):
+            nx, ny, nw, nh = roi['rect']
+            rx, ry = px + nx * pw, py + ny * ph
+            rw, rh = nw * pw, nh * ph
+            
+            # Hitboxes
+            resize_handle = QRect(int(rx + rw - 15), int(ry + rh - 15), 15, 15)
+            full_box = QRect(int(rx), int(ry), int(rw), int(rh))
+            
+            if resize_handle.contains(mx, my):
+                self.selected_id = roi['id']
+                self.drag_state = 'resize'
+                self.last_mouse_pos = (mx, my)
+                clicked_roi = roi
+                break
+            elif full_box.contains(mx, my):
+                self.selected_id = roi['id']
+                self.drag_state = 'move'
+                self.last_mouse_pos = (mx, my)
+                clicked_roi = roi
+                break
+                
+        if not clicked_roi:
+            self.selected_id = None
+            
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.selected_id is None or self.drag_state is None:
+            return
+            
+        mx, my = event.pos().x(), event.pos().y()
+        dx = mx - self.last_mouse_pos[0]
+        dy = my - self.last_mouse_pos[1]
+        self.last_mouse_pos = (mx, my)
+        
+        # Convert pixel movement to normalized percentage movement
+        pw, ph = self.pixmap_rect.width(), self.pixmap_rect.height()
+        dnx, dny = dx / pw, dy / ph
+        
+        for roi in self.rois:
+            if roi['id'] == self.selected_id:
+                nx, ny, nw, nh = roi['rect']
+                
+                if self.drag_state == 'move':
+                    nx = max(0.0, min(nx + dnx, 1.0 - nw))
+                    ny = max(0.0, min(ny + dny, 1.0 - nh))
+                    roi['rect'] = [nx, ny, nw, nh]
+                    
+                elif self.drag_state == 'resize':
+                    nw = max(0.05, min(nw + dnx, 1.0 - nx)) # Minimum 5% width
+                    nh = max(0.05, min(nh + dny, 1.0 - ny)) # Minimum 5% height
+                    roi['rect'] = [nx, ny, nw, nh]
+                break
+                
+        self.update()
+        self.rois_changed.emit(self.rois)
+
+    def mouseReleaseEvent(self, event):
+        self.drag_state = None
+        self.last_mouse_pos = None
+
+
 class CaptureEngine(QThread):
     frame_signal = pyqtSignal(np.ndarray)
     ocr_signal = pyqtSignal(str)
@@ -49,6 +214,7 @@ class CaptureEngine(QThread):
         self.source_path = None  
         self.ocr_counter = 0
         self._new_source_requested = False
+        self.active_rois = []
 
     def set_source_video(self, path):
         self.source_type = "video"
@@ -60,39 +226,29 @@ class CaptureEngine(QThread):
         self.source_path = title
         self._new_source_requested = True
 
+    def update_rois(self, rois):
+        self.active_rois = rois
+
     def capture_window_direct(self, hwnd):
-        """
-        True Window Capture: Grabs the window's internal render buffer.
-        This ignores any windows sitting on top of the target window.
-        """
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        w = rect.right - rect.left
-        h = rect.bottom - rect.top
-        
-        if w <= 0 or h <= 0:
-            return None
+        w, h = rect.right - rect.left, rect.bottom - rect.top
+        if w <= 0 or h <= 0: return None
             
-        # Create Device Contexts
         hwndDC = user32.GetWindowDC(hwnd)
         mfcDC = gdi32.CreateCompatibleDC(hwndDC)
         saveBitMap = gdi32.CreateCompatibleBitmap(hwndDC, w, h)
         gdi32.SelectObject(mfcDC, saveBitMap)
         
-        # PW_RENDERFULLCONTENT = 2 (Forces hardware-accelerated windows to render)
         result = user32.PrintWindow(hwnd, mfcDC, 2)
-        
         if result == 0:
-            user32.ReleaseDC(hwnd, hwndDC)
-            gdi32.DeleteDC(mfcDC)
-            gdi32.DeleteObject(saveBitMap)
+            user32.ReleaseDC(hwnd, hwndDC); gdi32.DeleteDC(mfcDC); gdi32.DeleteObject(saveBitMap)
             return None
             
-        # Extract the Bitmap
         bmi = BITMAPINFO()
         bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
         bmi.bmiHeader.biWidth = w
-        bmi.bmiHeader.biHeight = -h # Negative height to prevent upside-down image
+        bmi.bmiHeader.biHeight = -h 
         bmi.bmiHeader.biPlanes = 1
         bmi.bmiHeader.biBitCount = 32
         bmi.bmiHeader.biCompression = 0
@@ -100,12 +256,7 @@ class CaptureEngine(QThread):
         buffer = ctypes.create_string_buffer(w * h * 4)
         gdi32.GetDIBits(mfcDC, saveBitMap, 0, h, buffer, ctypes.byref(bmi), 0)
         
-        # Cleanup Memory
-        user32.ReleaseDC(hwnd, hwndDC)
-        gdi32.DeleteDC(mfcDC)
-        gdi32.DeleteObject(saveBitMap)
-        
-        # Convert to Numpy Array and force alpha channel to be opaque
+        user32.ReleaseDC(hwnd, hwndDC); gdi32.DeleteDC(mfcDC); gdi32.DeleteObject(saveBitMap)
         img = np.frombuffer(buffer, dtype=np.uint8).reshape((h, w, 4)).copy()
         img[:, :, 3] = 255 
         return img
@@ -123,46 +274,60 @@ class CaptureEngine(QThread):
 
                 frame = None
 
-                # --- MODE 1: VIDEO ---
+                # Generate Frame
                 if self.source_type == "video" and self.source_path:
-                    if cap is None:
-                        cap = cv2.VideoCapture(self.source_path)
-                    
+                    if cap is None: cap = cv2.VideoCapture(self.source_path)
                     ret, v_frame = cap.read()
                     if not ret:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         continue
                     frame = cv2.cvtColor(v_frame, cv2.COLOR_BGR2BGRA)
 
-                # --- MODE 2: SCREEN / WINDOW ---
                 elif self.source_type == "screen" and self.source_path:
                     try:
                         wins = gw.getWindowsWithTitle(self.source_path)
-                        if wins:
-                            win = wins[0]
-                            if not win.isMinimized:
-                                # 1. True Window Capture (No Mirror Effect)
-                                frame = self.capture_window_direct(win._hWnd)
-                                
-                                # 2. Fallback to Screen Capture if PrintWindow blocked
-                                if frame is None:
-                                    monitor = {"top": win.top, "left": win.left, "width": win.width, "height": win.height}
-                                    screenshot = sct.grab(monitor)
-                                    frame = np.array(screenshot)
+                        if wins and not wins[0].isMinimized:
+                            frame = self.capture_window_direct(wins[0]._hWnd)
+                            if frame is None:
+                                win = wins[0]
+                                screenshot = sct.grab({"top": win.top, "left": win.left, "width": win.width, "height": win.height})
+                                frame = np.array(screenshot)
                     except:
                         pass
 
-                # --- OUTPUT AND OCR ---
+                # Process Frame
                 if frame is not None:
                     self.frame_signal.emit(frame)
                     
                     if self.ocr_enabled:
                         self.ocr_counter += 1
-                        if self.ocr_counter >= 30: # OCR every ~30 frames (1 sec)
-                            gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                            text = pytesseract.image_to_string(gray)
-                            if text.strip():
-                                self.ocr_signal.emit(text.strip())
+                        if self.ocr_counter >= 30: # 1 second interval
+                            
+                            json_results = {}
+                            
+                            # If no ROIs, capture whole screen. Otherwise crop.
+                            if not self.active_rois:
+                                gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+                                text = pytesseract.image_to_string(gray).strip()
+                                if text: json_results["Full_Screen"] = text
+                            else:
+                                fh, fw = frame.shape[:2]
+                                for roi in self.active_rois:
+                                    nx, ny, nw, nh = roi['rect']
+                                    x, y = int(nx * fw), int(ny * fh)
+                                    w, h = int(nw * fw), int(nh * fh)
+                                    
+                                    # Crop and OCR
+                                    crop = frame[y:y+h, x:x+w]
+                                    if crop.size > 0:
+                                        gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
+                                        text = pytesseract.image_to_string(gray).strip()
+                                        json_results[roi['name']] = text
+                            
+                            if json_results:
+                                formatted_json = json.dumps(json_results, indent=4)
+                                self.ocr_signal.emit(formatted_json)
+                                
                             self.ocr_counter = 0
                 
                 self.msleep(30) # ~30 FPS
@@ -175,8 +340,8 @@ class CaptureEngine(QThread):
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro OCR - Unified Live Scene")
-        self.setMinimumSize(1200, 800)
+        self.setWindowTitle("Pro OCR - Regions of Interest")
+        self.setMinimumSize(1300, 850)
         self.setStyleSheet("QMainWindow { background-color: #1a1a1a; } QLabel { color: #eee; }")
         
         self.engine = CaptureEngine()
@@ -211,31 +376,46 @@ class OCRApp(QMainWindow):
         self.screen_widget.hide()
         left_layout.addWidget(self.screen_widget)
 
+        # --- ROI Controls (+ / -) ---
+        left_layout.addWidget(QLabel("<b>REGION SELECTION</b>"))
+        roi_buttons_layout = QHBoxLayout()
+        
+        self.btn_add_roi = QPushButton("+ Add Area")
+        self.btn_add_roi.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; padding: 8px;")
+        roi_buttons_layout.addWidget(self.btn_add_roi)
+        
+        self.btn_remove_roi = QPushButton("- Remove Selected")
+        self.btn_remove_roi.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; padding: 8px;")
+        roi_buttons_layout.addWidget(self.btn_remove_roi)
+        
+        left_layout.addLayout(roi_buttons_layout)
+
         self.btn_ocr = QPushButton("START OCR DETECTION")
         self.btn_ocr.setCheckable(True)
         self.btn_ocr.setFixedHeight(50)
-        self.btn_ocr.setStyleSheet("background-color: #333; color: white; font-weight: bold;")
+        self.btn_ocr.setStyleSheet("background-color: #333; color: white; font-weight: bold; margin-top: 15px;")
         self.btn_ocr.clicked.connect(self.toggle_ocr_logic)
         left_layout.addWidget(self.btn_ocr)
 
-        left_layout.addWidget(QLabel("<b>EXTRACTED TEXT</b>"))
+        left_layout.addWidget(QLabel("<b>JSON OUTPUT</b>"))
         self.ocr_output = QTextEdit()
         self.ocr_output.setReadOnly(True)
-        self.ocr_output.setStyleSheet("background-color: #000; color: #00ff41; font-family: Consolas; font-size: 13px;")
+        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: 1px solid #333;")
         left_layout.addWidget(self.ocr_output)
 
-        # --- RIGHT PANEL ---
-        self.right_container = QFrame()
-        self.right_container.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
-        right_layout = QVBoxLayout(self.right_container)
+        # --- RIGHT PANEL (Custom Canvas) ---
+        self.preview_overlay = ROIOverlayWidget()
+        self.preview_overlay.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
         
-        self.preview_label = QLabel("LIVE SCENE DISPLAY")
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setStyleSheet("color: #444; font-size: 20px; font-weight: bold;")
-        right_layout.addWidget(self.preview_label)
+        # Connect UI buttons to Canvas logic
+        self.btn_add_roi.clicked.connect(self.preview_overlay.add_roi)
+        self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_roi)
+        
+        # Connect Canvas data to Background Engine
+        self.preview_overlay.rois_changed.connect(self.engine.update_rois)
 
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.right_container)
+        splitter.addWidget(self.preview_overlay)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter)
 
@@ -267,17 +447,18 @@ class OCRApp(QMainWindow):
         state = self.btn_ocr.isChecked()
         self.engine.ocr_enabled = state
         self.btn_ocr.setText("STOP OCR DETECTION" if state else "START OCR DETECTION")
-        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#333'}; color: white; font-weight: bold;")
+        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#333'}; color: white; font-weight: bold; margin-top: 15px;")
 
     def update_preview(self, frame):
         h, w, c = frame.shape
         q_img = QImage(frame.data, w, h, w*c, QImage.Format.Format_RGBA8888).rgbSwapped()
         pixmap = QPixmap.fromImage(q_img)
-        scaled = pixmap.scaled(self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        self.preview_label.setPixmap(scaled)
+        # Send raw frame to Canvas. Canvas handles the resizing/drawing.
+        self.preview_overlay.set_frame(pixmap)
 
     def update_ocr_text(self, text):
-        self.ocr_output.append(f"> {text}")
+        self.ocr_output.append(f"{text}\n")
+        # Auto-scroll to bottom
         self.ocr_output.verticalScrollBar().setValue(self.ocr_output.verticalScrollBar().maximum())
 
 if __name__ == "__main__":
