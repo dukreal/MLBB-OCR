@@ -10,7 +10,7 @@ import ctypes
 from ctypes import wintypes
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
-                             QComboBox, QFrame, QSplitter, QFileDialog)
+                             QComboBox, QFrame, QSplitter, QFileDialog, QScrollArea)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
 
@@ -38,19 +38,18 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
 
 class ROIOverlayWidget(QWidget):
-    """Custom Widget to draw the video feed, handle ROIs, Zoom, and Pan."""
+    """Custom Widget that resizes dynamically inside a QScrollArea."""
     rois_changed = pyqtSignal(list)
 
-    def __init__(self):
+    def __init__(self, scroll_area):
         super().__init__()
+        self.scroll_area = scroll_area
         self.current_pixmap = QPixmap()
-        self.pixmap_rect = QRect()
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) # Required to capture key events properly
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) 
         
-        # Viewport (Zoom/Pan) Settings
+        # Viewport Settings
         self.zoom_factor = 1.0
-        self.pan_x = 0
-        self.pan_y = 0
+        self.is_new_source = True
         
         # ROI Data
         self.rois = []  
@@ -65,7 +64,7 @@ class ROIOverlayWidget(QWidget):
         self.rois.append({
             'id': self.area_counter,
             'name': f'Area_{self.area_counter}',
-            'rect': [0.4, 0.4, 0.2, 0.2]  # Normalized coordinates
+            'rect': [0.4, 0.4, 0.2, 0.2]  # Normalized coordinates (0.0 to 1.0)
         })
         self.selected_id = self.area_counter
         self.area_counter += 1
@@ -81,82 +80,87 @@ class ROIOverlayWidget(QWidget):
 
     def set_frame(self, pixmap):
         self.current_pixmap = pixmap
+        if self.is_new_source:
+            self.fit_to_view()
+            self.is_new_source = False
+        else:
+            self.update_size()
         self.update() 
 
+    def update_size(self):
+        """Dynamically resize the widget so QScrollArea updates its scrollbars."""
+        if self.current_pixmap.isNull(): return
+        new_w = int(self.current_pixmap.width() * self.zoom_factor)
+        new_h = int(self.current_pixmap.height() * self.zoom_factor)
+        
+        if self.width() != new_w or self.height() != new_h:
+            self.setFixedSize(new_w, new_h)
+
+    def fit_to_view(self):
+        """Calculates default zoom to perfectly fit the screen layout."""
+        if self.current_pixmap.isNull(): return
+        vw = self.scroll_area.viewport().width()
+        vh = self.scroll_area.viewport().height()
+        pw = self.current_pixmap.width()
+        ph = self.current_pixmap.height()
+        
+        if pw > 0 and ph > 0:
+            scale_w = vw / pw
+            scale_h = vh / ph
+            self.zoom_factor = min(scale_w, scale_h) * 0.95 # Leave a 5% margin
+            self.update_size()
+
     def reset_view(self):
-        """Triggered by Ctrl+R to reset zoom and pan"""
-        self.zoom_factor = 1.0
-        self.pan_x = 0
-        self.pan_y = 0
-        self.update()
+        """Triggered by Ctrl+R"""
+        self.fit_to_view()
 
     def wheelEvent(self, event):
-        # Capture both X and Y scroll data (fixes Alt/Shift horizontal hijacking)
         delta_y = event.angleDelta().y()
         delta_x = event.angleDelta().x()
-        
-        # Use whichever direction actually registered the scroll
         delta = delta_y if delta_y != 0 else delta_x
-        
-        if delta == 0:
-            return  # Prevent infinite panning if delta is zero
+        if delta == 0: return
 
         modifiers = event.modifiers()
 
         if modifiers == Qt.KeyboardModifier.ControlModifier:
             # Zoom In/Out
-            if delta > 0: self.zoom_factor += 0.1
-            else: self.zoom_factor -= 0.1
-            # Clamp zoom between 50% and 500%
-            self.zoom_factor = max(0.5, min(self.zoom_factor, 5.0))
+            if delta > 0: self.zoom_factor *= 1.15
+            else: self.zoom_factor *= 0.85
+            self.zoom_factor = max(0.2, min(self.zoom_factor, 10.0))
+            self.update_size()
+            event.accept()
             
         elif modifiers == Qt.KeyboardModifier.AltModifier:
             # Pan Left/Right
-            if delta > 0: self.pan_x += 40
-            else: self.pan_x -= 40
+            hbar = self.scroll_area.horizontalScrollBar()
+            hbar.setValue(hbar.value() - int(delta / 2))
+            event.accept()
             
-        elif modifiers == Qt.KeyboardModifier.ShiftModifier:
-            # Pan Up/Down
-            if delta > 0: self.pan_y += 40
-            else: self.pan_y -= 40
-
-        self.update()
+        else:
+            # Normal Mouse Scroll Up/Down
+            vbar = self.scroll_area.verticalScrollBar()
+            vbar.setValue(vbar.value() - int(delta / 2))
+            event.accept()
 
     def paintEvent(self, event):
-        if self.current_pixmap.isNull():
-            return
+        if self.current_pixmap.isNull(): return
             
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Calculate base dimensions preserving aspect ratio
-        widget_w, widget_h = self.width(), self.height()
-        pix_w, pix_h = self.current_pixmap.width(), self.current_pixmap.height()
+        w, h = self.width(), self.height()
         
-        scale = min(widget_w / pix_w, widget_h / pix_h)
-        base_w, base_h = pix_w * scale, pix_h * scale
+        # 1. Draw scaled image filling this custom widget
+        painter.drawPixmap(0, 0, w, h, self.current_pixmap)
 
-        # Apply Zoom Factor
-        current_w = base_w * self.zoom_factor
-        current_h = base_h * self.zoom_factor
-
-        # Center Anchor + Apply Pan offsets
-        x_offset = (widget_w - current_w) / 2 + self.pan_x
-        y_offset = (widget_h - current_h) / 2 + self.pan_y
-
-        self.pixmap_rect = QRect(int(x_offset), int(y_offset), int(current_w), int(current_h))
-        
-        # 1. Draw the Video Frame scaled and positioned
-        painter.drawPixmap(self.pixmap_rect, self.current_pixmap)
-
-        # 2. Draw the ROI Boxes mapping to the zoomed coordinates
+        # 2. Draw ROIs mapping exactly to widget size
         for roi in self.rois:
             nx, ny, nw, nh = roi['rect']
-            rx = int(x_offset + nx * current_w)
-            ry = int(y_offset + ny * current_h)
-            rw = int(nw * current_w)
-            rh = int(nh * current_h)
+            rx = int(nx * w)
+            ry = int(ny * h)
+            rw = int(nw * w)
+            rh = int(nh * h)
 
             is_selected = (roi['id'] == self.selected_id)
 
@@ -178,25 +182,19 @@ class ROIOverlayWidget(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(rx + 5, ry - 5, roi['name'])
 
-            # Draw "Resize Handle" if selected
+            # Draw "Resize Handle"
             if is_selected:
                 painter.setBrush(QColor(0, 255, 0))
                 painter.drawRect(rx + rw - 12, ry + rh - 12, 12, 12)
 
     def mousePressEvent(self, event):
-        if self.pixmap_rect.isNull() or not self.pixmap_rect.contains(event.pos()):
-            self.selected_id = None
-            self.update()
-            return
-            
         mx, my = event.pos().x(), event.pos().y()
-        px, py, pw, ph = self.pixmap_rect.x(), self.pixmap_rect.y(), self.pixmap_rect.width(), self.pixmap_rect.height()
+        w, h = self.width(), self.height()
         
         clicked_roi = None
         for roi in reversed(self.rois):
             nx, ny, nw, nh = roi['rect']
-            rx, ry = px + nx * pw, py + ny * ph
-            rw, rh = nw * pw, nh * ph
+            rx, ry, rw, rh = nx * w, ny * h, nw * w, nh * h
             
             resize_handle = QRect(int(rx + rw - 15), int(ry + rh - 15), 15, 15)
             full_box = QRect(int(rx), int(ry), int(rw), int(rh))
@@ -218,16 +216,14 @@ class ROIOverlayWidget(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
-        if self.selected_id is None or self.drag_state is None:
-            return
+        if self.selected_id is None or self.drag_state is None: return
             
         mx, my = event.pos().x(), event.pos().y()
         dx = mx - self.last_mouse_pos[0]
         dy = my - self.last_mouse_pos[1]
         self.last_mouse_pos = (mx, my)
         
-        pw, ph = self.pixmap_rect.width(), self.pixmap_rect.height()
-        dnx, dny = dx / pw, dy / ph
+        dnx, dny = dx / self.width(), dy / self.height()
         
         for roi in self.rois:
             if roi['id'] == self.selected_id:
@@ -315,9 +311,7 @@ class CaptureEngine(QThread):
             cap = None
             while self.running:
                 if self._new_source_requested:
-                    if cap is not None:
-                        cap.release()
-                        cap = None
+                    if cap is not None: cap.release(); cap = None
                     self._new_source_requested = False
 
                 frame = None
@@ -357,9 +351,7 @@ class CaptureEngine(QThread):
                                 fh, fw = frame.shape[:2]
                                 for roi in self.active_rois:
                                     nx, ny, nw, nh = roi['rect']
-                                    x, y = int(nx * fw), int(ny * fh)
-                                    w, h = int(nw * fw), int(nh * fh)
-                                    
+                                    x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
                                     crop = frame[y:y+h, x:x+w]
                                     if crop.size > 0:
                                         gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
@@ -368,7 +360,6 @@ class CaptureEngine(QThread):
                             
                             if json_results:
                                 self.ocr_signal.emit(json.dumps(json_results, indent=4))
-                                
                             self.ocr_counter = 0
                 
                 self.msleep(30)
@@ -381,7 +372,7 @@ class CaptureEngine(QThread):
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pro OCR - Zoom & Pan Canvas")
+        self.setWindowTitle("Pro OCR - Scrollbars & Zoom")
         self.setMinimumSize(1300, 850)
         self.setStyleSheet("QMainWindow { background-color: #1a1a1a; } QLabel { color: #eee; }")
         
@@ -421,8 +412,7 @@ class OCRApp(QMainWindow):
         self.screen_widget.hide()
         left_layout.addWidget(self.screen_widget)
 
-        # ROI Controls
-        left_layout.addWidget(QLabel("<b>REGION CONTROLS (Ctrl+Scroll = Zoom | Alt+Scroll = Pan)</b>"))
+        left_layout.addWidget(QLabel("<b>REGION CONTROLS</b><br><small>Mouse=Up/Down | Alt+Mouse=Left/Right<br>Ctrl+Mouse=Zoom | Ctrl+R=Reset</small>"))
         roi_buttons_layout = QHBoxLayout()
         
         self.btn_add_roi = QPushButton("+ Add Area")
@@ -448,16 +438,20 @@ class OCRApp(QMainWindow):
         self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 13px; border: 1px solid #333;")
         left_layout.addWidget(self.ocr_output)
 
-        # --- RIGHT PANEL ---
-        self.preview_overlay = ROIOverlayWidget()
-        self.preview_overlay.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
+        # --- RIGHT PANEL (Scroll Area) ---
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll_area.setStyleSheet("background-color: #000; border-left: 2px solid #333;")
+        
+        self.preview_overlay = ROIOverlayWidget(self.scroll_area)
+        self.scroll_area.setWidget(self.preview_overlay)
         
         self.btn_add_roi.clicked.connect(self.preview_overlay.add_roi)
         self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_roi)
         self.preview_overlay.rois_changed.connect(self.engine.update_rois)
 
         splitter.addWidget(left_panel)
-        splitter.addWidget(self.preview_overlay)
+        splitter.addWidget(self.scroll_area)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter)
 
@@ -468,6 +462,7 @@ class OCRApp(QMainWindow):
         if source == "Open a Video File":
             path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Video Files (*.mp4 *.avi *.mkv)")
             if path:
+                self.preview_overlay.is_new_source = True
                 self.engine.set_source_video(path)
                 if not self.engine.isRunning(): self.engine.start()
 
@@ -482,6 +477,7 @@ class OCRApp(QMainWindow):
 
     def handle_window_pick(self, title):
         if title:
+            self.preview_overlay.is_new_source = True
             self.engine.set_source_screen(title)
             if not self.engine.isRunning(): self.engine.start()
 
