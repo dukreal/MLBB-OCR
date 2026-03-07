@@ -59,16 +59,16 @@ class ROIOverlayWidget(QWidget):
         self.last_mouse_pos = None
 
     def add_field(self):
-        """Creates a data field but does NOT add it to the scene yet."""
+        """Creates a data field named 'Area X' but does NOT add it to the scene yet."""
         self.rois.append({
             'id': self.area_counter,
-            'name': "", # Empty default value
+            'name': f"Area {self.area_counter}", # Default Name Added
             'rect': [0.4, 0.4, 0.2, 0.2],
             'type': 'General Text',
             'threshold': 1,  
             'thickness': 5,  
             'confidence': 6, 
-            'is_on_scene': False # Hide by default
+            'is_on_scene': False 
         })
         self.selected_id = self.area_counter
         self.area_counter += 1
@@ -187,7 +187,6 @@ class ROIOverlayWidget(QWidget):
 
             painter.drawRect(rx, ry, rw, rh)
             
-            # Tag rendering
             name_text = roi['name'] if roi['name'] else "Unnamed"
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -404,7 +403,7 @@ class CaptureEngine(QThread):
                     previews = {}
                     fh, fw = frame.shape[:2]
                     for roi in self.active_rois:
-                        if not roi['is_on_scene']: continue # Skip fields not on scene
+                        if not roi['is_on_scene']: continue 
 
                         nx, ny, nw, nh = roi['rect']
                         x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
@@ -422,7 +421,6 @@ class CaptureEngine(QThread):
                             extracted_data = {}
                             areas_scanned = 0
                             
-                            # Only process fields physically placed on the scene
                             scene_rois = [r for r in self.active_rois if r['is_on_scene']]
 
                             if not scene_rois:
@@ -453,7 +451,6 @@ class CaptureEngine(QThread):
                                                 
                                         text = " ".join(words)
                                         if text:
-                                            # Use field Name. If empty, use ID.
                                             safe_name = roi['name'] if roi['name'] else f"Field_{roi['id']}"
                                             extracted_data[safe_name] = text
                             
@@ -546,8 +543,9 @@ class OCRApp(QMainWindow):
         self.screen_widget.hide()
         config_layout.addWidget(self.screen_widget)
 
-        # OBS-STYLE TABLE AND BUTTONS (+ / -)
+        # --- OBS-STYLE TABLE AND BUTTONS (+ / -) ---
         table_layout = QHBoxLayout()
+        table_layout.setSpacing(5) # Tight spacing between table and buttons
         
         self.roi_table = QTableWidget(0, 2)
         self.roi_table.setHorizontalHeaderLabels(["Field", "Value"])
@@ -563,23 +561,29 @@ class OCRApp(QMainWindow):
             QTableWidget::item:selected { background-color: #2980b9; }
         """)
         self.roi_table.itemSelectionChanged.connect(self.on_table_selection)
-        self.roi_table.itemChanged.connect(self.on_table_item_changed) # Hooks into double-click renaming
+        self.roi_table.itemChanged.connect(self.on_table_item_changed) 
         
         table_layout.addWidget(self.roi_table)
 
+        # +/- Buttons side-by-side matching the image
         btn_layout = QVBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(5)
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
         self.btn_add_roi = QPushButton("+")
-        self.btn_add_roi.setFixedSize(30, 30)
+        self.btn_add_roi.setFixedSize(28, 28)
+        
         self.btn_remove_roi = QPushButton("-")
-        self.btn_remove_roi.setFixedSize(30, 30)
+        self.btn_remove_roi.setFixedSize(28, 28)
+        
         btn_layout.addWidget(self.btn_add_roi)
         btn_layout.addWidget(self.btn_remove_roi)
-        btn_layout.addStretch()
         
         table_layout.addLayout(btn_layout)
         config_layout.addLayout(table_layout)
 
-        # SCENE CONTROLS (Add to Scene / Remove Selected)
+        # --- SCENE CONTROLS ---
         scene_btn_layout = QHBoxLayout()
         self.btn_add_scene = QPushButton("Add to Scene ->")
         self.btn_remove_scene = QPushButton("Remove Selected")
@@ -587,7 +591,7 @@ class OCRApp(QMainWindow):
         scene_btn_layout.addWidget(self.btn_remove_scene)
         config_layout.addLayout(scene_btn_layout)
 
-        # COMPACT PROPERTIES PANEL
+        # --- COMPACT PROPERTIES PANEL ---
         self.props_frame = QFrame()
         self.props_frame.setStyleSheet("QFrame { background-color: #2e2e2e; border-radius: 3px; border: 1px solid #444; margin-top: 10px; }")
         props_main_layout = QVBoxLayout(self.props_frame)
@@ -601,7 +605,12 @@ class OCRApp(QMainWindow):
         self.lbl_target.setStyleSheet("color: #00d2ff; font-weight: bold; border: none;")
         header_layout.addWidget(self.lbl_target)
         header_layout.addStretch()
-        header_layout.addWidget(QPushButton("Defaults"))
+        
+        # --- FIX: DEFAULTS BUTTON SETUP ---
+        self.btn_defaults = QPushButton("Defaults")
+        self.btn_defaults.clicked.connect(self.reset_to_defaults)
+        header_layout.addWidget(self.btn_defaults)
+        
         props_main_layout.addLayout(header_layout)
 
         # Dense Grid Layout
@@ -696,7 +705,7 @@ class OCRApp(QMainWindow):
         self.preview_overlay = ROIOverlayWidget(self.scroll_area)
         self.scroll_area.setWidget(self.preview_overlay)
         
-        # Connect Buttons to Overlay Engine
+        # Connect Buttons
         self.btn_add_roi.clicked.connect(self.preview_overlay.add_field)
         self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_field)
         self.btn_add_scene.clicked.connect(self.preview_overlay.add_to_scene)
@@ -710,8 +719,17 @@ class OCRApp(QMainWindow):
 
         self.enable_properties_panel(False)
 
+    def reset_to_defaults(self):
+        """Resets the currently selected field's sliders to default values."""
+        if self.preview_overlay.selected_id is None: return
+        
+        # Update UI Controls (sync_properties runs automatically via signals)
+        self.combo_type.setCurrentText("General Text")
+        self.sl_thresh.setValue(1)  # Auto
+        self.sl_thick.setValue(5)   # Normal
+        self.sl_conf.setValue(6)    # 60%
+
     def on_table_item_changed(self, item):
-        """Fires when the user double clicks and renames a field in the table."""
         if self.internal_update: return
         
         if item.column() == 0:
@@ -741,13 +759,10 @@ class OCRApp(QMainWindow):
         self.roi_table.setRowCount(len(rois))
         
         for i, roi in enumerate(rois):
-            # Editable Name Field
             item_name = QTableWidgetItem(roi['name'])
             item_name.setData(Qt.ItemDataRole.UserRole, roi['id'])
-            # Make sure it IS editable
             item_name.setFlags(item_name.flags() | Qt.ItemFlag.ItemIsEditable)
             
-            # Non-Editable Value Field
             curr_val = self.roi_table.item(i, 1)
             val_text = curr_val.text() if curr_val else ""
             item_val = QTableWidgetItem(val_text)
@@ -767,6 +782,7 @@ class OCRApp(QMainWindow):
         self.sl_thresh.setEnabled(enabled)
         self.sl_thick.setEnabled(enabled)
         self.sl_conf.setEnabled(enabled)
+        self.btn_defaults.setEnabled(enabled)
         
         if not enabled:
             self.lbl_target.setText("Select an item above")
@@ -877,7 +893,6 @@ class OCRApp(QMainWindow):
         
         self.internal_update = True
         for i in range(self.roi_table.rowCount()):
-            # The key in data_dict is the field name (or ID fallback)
             field_name = self.roi_table.item(i, 0).text()
             roi_id = self.roi_table.item(i, 0).data(Qt.ItemDataRole.UserRole)
             safe_name = field_name if field_name else f"Field_{roi_id}"
