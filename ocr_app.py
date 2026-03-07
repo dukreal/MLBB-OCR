@@ -59,10 +59,9 @@ class ROIOverlayWidget(QWidget):
         self.last_mouse_pos = None
 
     def add_field(self):
-        """Creates a data field named 'Area X' but does NOT add it to the scene yet."""
         self.rois.append({
             'id': self.area_counter,
-            'name': f"Area {self.area_counter}", # Default Name Added
+            'name': f"Area {self.area_counter}", 
             'rect': [0.4, 0.4, 0.2, 0.2],
             'type': 'General Text',
             'threshold': 1,  
@@ -76,7 +75,6 @@ class ROIOverlayWidget(QWidget):
         self.roi_selected.emit(self.selected_id)
 
     def remove_selected_field(self):
-        """Deletes the entire field from memory."""
         if self.selected_id is not None:
             self.rois = [r for r in self.rois if r['id'] != self.selected_id]
             self.selected_id = None
@@ -85,7 +83,6 @@ class ROIOverlayWidget(QWidget):
             self.roi_selected.emit(-1)
 
     def add_to_scene(self):
-        """Places the selected field's box onto the video canvas."""
         if self.selected_id is not None:
             for roi in self.rois:
                 if roi['id'] == self.selected_id:
@@ -95,7 +92,6 @@ class ROIOverlayWidget(QWidget):
             self.rois_changed.emit(self.rois)
 
     def remove_from_scene(self):
-        """Removes the selected field's box from the video canvas."""
         if self.selected_id is not None:
             for roi in self.rois:
                 if roi['id'] == self.selected_id:
@@ -357,7 +353,6 @@ class CaptureEngine(QThread):
 
                 frame = None
 
-                # 1. VIDEO SOURCE
                 if self.source_type == "video" and self.source_path:
                     if cap is None: 
                         cap = cv2.VideoCapture(self.source_path)
@@ -382,7 +377,6 @@ class CaptureEngine(QThread):
                         continue
                     frame = cv2.cvtColor(v_frame, cv2.COLOR_BGR2BGRA)
 
-                # 2. SCREEN SOURCE
                 elif self.source_type == "screen" and self.source_path:
                     target_fps = 30.0 
                     try:
@@ -396,7 +390,6 @@ class CaptureEngine(QThread):
                     except:
                         pass
 
-                # 3. PROCESS FRAME
                 if frame is not None:
                     self.frame_signal.emit(frame)
                     
@@ -451,7 +444,7 @@ class CaptureEngine(QThread):
                                                 
                                         text = " ".join(words)
                                         if text:
-                                            safe_name = roi['name'] if roi['name'] else f"Field_{roi['id']}"
+                                            safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
                                             extracted_data[safe_name] = text
                             
                             ocr_end_time = time.time()
@@ -466,7 +459,6 @@ class CaptureEngine(QThread):
                             
                             self.ocr_counter = 0
                 
-                # 4. DYNAMIC SLEEP
                 elapsed_time_ms = (time.time() - loop_start) * 1000
                 target_delay_ms = 1000.0 / target_fps
                 sleep_time = int(max(1, target_delay_ms - elapsed_time_ms))
@@ -543,14 +535,19 @@ class OCRApp(QMainWindow):
         self.screen_widget.hide()
         config_layout.addWidget(self.screen_widget)
 
-        # --- OBS-STYLE TABLE AND BUTTONS (+ / -) ---
+        # --- TABLE WITH 3 COLUMNS AND SIDE BUTTONS ---
         table_layout = QHBoxLayout()
-        table_layout.setSpacing(5) # Tight spacing between table and buttons
+        table_layout.setSpacing(5) 
         
-        self.roi_table = QTableWidget(0, 2)
-        self.roi_table.setHorizontalHeaderLabels(["Field", "Value"])
-        self.roi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.roi_table = QTableWidget(0, 3) # Added 3rd column for Status indicator
+        self.roi_table.setHorizontalHeaderLabels(["", "Field", "Value"])
+        
+        # Configure Status Column (Width = 25px)
+        self.roi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.roi_table.setColumnWidth(0, 25)
+        
         self.roi_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.roi_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.roi_table.verticalHeader().setVisible(False)
         self.roi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.roi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -565,7 +562,6 @@ class OCRApp(QMainWindow):
         
         table_layout.addWidget(self.roi_table)
 
-        # +/- Buttons side-by-side matching the image
         btn_layout = QVBoxLayout()
         btn_layout.setContentsMargins(0, 0, 0, 0)
         btn_layout.setSpacing(5)
@@ -573,7 +569,6 @@ class OCRApp(QMainWindow):
         
         self.btn_add_roi = QPushButton("+")
         self.btn_add_roi.setFixedSize(28, 28)
-        
         self.btn_remove_roi = QPushButton("-")
         self.btn_remove_roi.setFixedSize(28, 28)
         
@@ -583,7 +578,6 @@ class OCRApp(QMainWindow):
         table_layout.addLayout(btn_layout)
         config_layout.addLayout(table_layout)
 
-        # --- SCENE CONTROLS ---
         scene_btn_layout = QHBoxLayout()
         self.btn_add_scene = QPushButton("Add to Scene ->")
         self.btn_remove_scene = QPushButton("Remove Selected")
@@ -591,14 +585,12 @@ class OCRApp(QMainWindow):
         scene_btn_layout.addWidget(self.btn_remove_scene)
         config_layout.addLayout(scene_btn_layout)
 
-        # --- COMPACT PROPERTIES PANEL ---
         self.props_frame = QFrame()
         self.props_frame.setStyleSheet("QFrame { background-color: #2e2e2e; border-radius: 3px; border: 1px solid #444; margin-top: 10px; }")
         props_main_layout = QVBoxLayout(self.props_frame)
         props_main_layout.setContentsMargins(10, 10, 10, 10)
         props_main_layout.setSpacing(8)
         
-        # Target Header
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("Target:"))
         self.lbl_target = QLabel("Select an item above")
@@ -606,14 +598,12 @@ class OCRApp(QMainWindow):
         header_layout.addWidget(self.lbl_target)
         header_layout.addStretch()
         
-        # --- FIX: DEFAULTS BUTTON SETUP ---
         self.btn_defaults = QPushButton("Defaults")
         self.btn_defaults.clicked.connect(self.reset_to_defaults)
         header_layout.addWidget(self.btn_defaults)
         
         props_main_layout.addLayout(header_layout)
 
-        # Dense Grid Layout
         grid = QGridLayout()
         grid.setSpacing(10)
 
@@ -623,7 +613,6 @@ class OCRApp(QMainWindow):
         self.combo_type.currentIndexChanged.connect(self.sync_properties)
         grid.addWidget(self.combo_type, 0, 1)
 
-        # Sliders
         self.sl_thresh = QSlider(Qt.Orientation.Horizontal)
         self.sl_thick = QSlider(Qt.Orientation.Horizontal)
         self.sl_conf = QSlider(Qt.Orientation.Horizontal)
@@ -705,7 +694,6 @@ class OCRApp(QMainWindow):
         self.preview_overlay = ROIOverlayWidget(self.scroll_area)
         self.scroll_area.setWidget(self.preview_overlay)
         
-        # Connect Buttons
         self.btn_add_roi.clicked.connect(self.preview_overlay.add_field)
         self.btn_remove_roi.clicked.connect(self.preview_overlay.remove_selected_field)
         self.btn_add_scene.clicked.connect(self.preview_overlay.add_to_scene)
@@ -720,19 +708,17 @@ class OCRApp(QMainWindow):
         self.enable_properties_panel(False)
 
     def reset_to_defaults(self):
-        """Resets the currently selected field's sliders to default values."""
         if self.preview_overlay.selected_id is None: return
-        
-        # Update UI Controls (sync_properties runs automatically via signals)
         self.combo_type.setCurrentText("General Text")
-        self.sl_thresh.setValue(1)  # Auto
-        self.sl_thick.setValue(5)   # Normal
-        self.sl_conf.setValue(6)    # 60%
+        self.sl_thresh.setValue(1)  
+        self.sl_thick.setValue(5)   
+        self.sl_conf.setValue(6)    
 
     def on_table_item_changed(self, item):
         if self.internal_update: return
         
-        if item.column() == 0:
+        # Name is now in Column 1 (index 1)
+        if item.column() == 1:
             roi_id = item.data(Qt.ItemDataRole.UserRole)
             new_name = item.text().strip()
             
@@ -748,9 +734,13 @@ class OCRApp(QMainWindow):
 
     def on_table_selection(self):
         if self.internal_update: return
-        selected_items = self.roi_table.selectedItems()
-        if selected_items:
-            roi_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        
+        # Get the currently selected row
+        row = self.roi_table.currentRow()
+        if row >= 0:
+            # We stored the ID inside Column 1
+            item = self.roi_table.item(row, 1)
+            roi_id = item.data(Qt.ItemDataRole.UserRole)
             self.preview_overlay.select_roi_by_id(roi_id)
             self.populate_properties_panel(roi_id)
 
@@ -759,17 +749,30 @@ class OCRApp(QMainWindow):
         self.roi_table.setRowCount(len(rois))
         
         for i, roi in enumerate(rois):
+            # 1. Status Column
+            status_char = "✓" if roi['is_on_scene'] else "✖"
+            item_status = QTableWidgetItem(status_char)
+            item_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item_status.setFlags(item_status.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if roi['is_on_scene']:
+                item_status.setForeground(QColor("#2ecc71")) # Green Check
+            else:
+                item_status.setForeground(QColor("#888888")) # Gray X
+                
+            # 2. Name Column
             item_name = QTableWidgetItem(roi['name'])
-            item_name.setData(Qt.ItemDataRole.UserRole, roi['id'])
+            item_name.setData(Qt.ItemDataRole.UserRole, roi['id']) # Store ID here
             item_name.setFlags(item_name.flags() | Qt.ItemFlag.ItemIsEditable)
             
-            curr_val = self.roi_table.item(i, 1)
+            # 3. Value Column
+            curr_val = self.roi_table.item(i, 2)
             val_text = curr_val.text() if curr_val else ""
             item_val = QTableWidgetItem(val_text)
             item_val.setFlags(item_val.flags() & ~Qt.ItemFlag.ItemIsEditable)
             
-            self.roi_table.setItem(i, 0, item_name)
-            self.roi_table.setItem(i, 1, item_val)
+            self.roi_table.setItem(i, 0, item_status)
+            self.roi_table.setItem(i, 1, item_name)
+            self.roi_table.setItem(i, 2, item_val)
             
             if roi['id'] == self.preview_overlay.selected_id:
                 self.roi_table.selectRow(i)
@@ -840,7 +843,7 @@ class OCRApp(QMainWindow):
             
             self.internal_update = True
             for i in range(self.roi_table.rowCount()):
-                if self.roi_table.item(i, 0).data(Qt.ItemDataRole.UserRole) == roi_id:
+                if self.roi_table.item(i, 1).data(Qt.ItemDataRole.UserRole) == roi_id:
                     self.roi_table.selectRow(i)
                     break
             self.internal_update = False
@@ -893,12 +896,12 @@ class OCRApp(QMainWindow):
         
         self.internal_update = True
         for i in range(self.roi_table.rowCount()):
-            field_name = self.roi_table.item(i, 0).text()
-            roi_id = self.roi_table.item(i, 0).data(Qt.ItemDataRole.UserRole)
-            safe_name = field_name if field_name else f"Field_{roi_id}"
+            field_name = self.roi_table.item(i, 1).text()
+            roi_id = self.roi_table.item(i, 1).data(Qt.ItemDataRole.UserRole)
+            safe_name = field_name if field_name else f"Area_{roi_id}"
             
             if safe_name in data_dict:
-                self.roi_table.item(i, 1).setText(data_dict[safe_name])
+                self.roi_table.item(i, 2).setText(data_dict[safe_name])
         self.internal_update = False
 
 if __name__ == "__main__":
