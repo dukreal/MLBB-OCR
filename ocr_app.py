@@ -14,7 +14,7 @@ import concurrent.futures
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
-                             QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout)
+                             QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
 
@@ -25,7 +25,6 @@ os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
 # ==========================================================
 # SET YOUR TESSERACT PATH HERE
 # ==========================================================
-# Look for Tesseract in the local folder, fallback to default if missing
 current_dir = os.path.dirname(os.path.abspath(__file__))
 local_tess = os.path.join(current_dir, "Tesseract-OCR", "tesseract.exe")
 if os.path.exists(local_tess):
@@ -281,19 +280,16 @@ class CaptureEngine(QThread):
         self.ocr_counter = 0
         self._new_source_requested = False
         self.active_rois = []
-        
-        # CPU Threads Configuration
         self.thread_count = 2
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
         self.active_futures = []
 
     def set_thread_count(self, count):
-        """Dynamically adjusts the number of CPU cores used for OCR processing."""
         self.thread_count = count
         if self.executor:
             self.executor.shutdown(wait=False)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
-        self.active_futures = [] # Reset active tracking
+        self.active_futures = [] 
 
     def set_source_video(self, path):
         self.source_type = "video"
@@ -359,7 +355,6 @@ class CaptureEngine(QThread):
         return processed
 
     def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time):
-        """Worker function that runs on a separate CPU core."""
         extracted_data = {}
         areas_scanned = 0
         
@@ -390,10 +385,7 @@ class CaptureEngine(QThread):
         ocr_end_time = time.time()
         if extracted_data:
             process_ms = int((ocr_end_time - ocr_start_time) * 1000)
-            metadata = {
-                "process_time_ms": process_ms,
-                "areas_scanned": areas_scanned
-            }
+            metadata = {"process_time_ms": process_ms, "areas_scanned": areas_scanned}
             self.ocr_signal.emit(metadata, extracted_data)
 
     def run(self):
@@ -414,7 +406,6 @@ class CaptureEngine(QThread):
 
                 frame = None
 
-                # 1. VIDEO SOURCE
                 if self.source_type == "video" and self.source_path:
                     if cap is None: 
                         cap = cv2.VideoCapture(self.source_path)
@@ -439,7 +430,6 @@ class CaptureEngine(QThread):
                         continue
                     frame = cv2.cvtColor(v_frame, cv2.COLOR_BGR2BGRA)
 
-                # 2. SCREEN SOURCE
                 elif self.source_type == "screen" and self.source_path:
                     target_fps = 30.0 
                     try:
@@ -453,7 +443,6 @@ class CaptureEngine(QThread):
                     except:
                         pass
 
-                # 3. PROCESS FRAME
                 if frame is not None:
                     self.frame_signal.emit(frame)
                     
@@ -472,34 +461,19 @@ class CaptureEngine(QThread):
 
                     if self.ocr_enabled:
                         self.ocr_counter += 1
-                        
-                        # Set to trigger roughly 10 times a second
                         trigger_frames = max(1, int(target_fps / 10)) 
                         
                         if self.ocr_counter >= trigger_frames: 
-                            # Clean out completed threads
                             self.active_futures = [f for f in self.active_futures if not f.done()]
-                            
-                            # Only spawn a new task if we haven't maxed out the CPU pool
                             if len(self.active_futures) < self.thread_count:
                                 if scene_rois:
                                     ocr_start_time = time.time() 
-                                    
-                                    # Deep copy to prevent memory modification issues in the thread
                                     rois_copy = [r.copy() for r in scene_rois]
                                     prev_copy = {k: v.copy() for k, v in previews.items()}
-                                    
-                                    future = self.executor.submit(
-                                        self._run_ocr_background, 
-                                        rois_copy, 
-                                        prev_copy, 
-                                        ocr_start_time
-                                    )
+                                    future = self.executor.submit(self._run_ocr_background, rois_copy, prev_copy, ocr_start_time)
                                     self.active_futures.append(future)
-                            
                             self.ocr_counter = 0
                 
-                # 4. DYNAMIC SLEEP
                 elapsed_time_ms = (time.time() - loop_start) * 1000
                 target_delay_ms = 1000.0 / target_fps
                 sleep_time = int(max(1, target_delay_ms - elapsed_time_ms))
@@ -535,6 +509,9 @@ class OCRApp(QMainWindow):
         
         self.shortcut_reset = QShortcut(QKeySequence("Ctrl+R"), self)
         self.shortcut_reset.activated.connect(self.preview_overlay.reset_view)
+        
+        # Look for default workspace
+        self.load_default_workspace()
 
     def init_ui(self):
         central = QWidget()
@@ -562,7 +539,6 @@ class OCRApp(QMainWindow):
         config_layout = QVBoxLayout(tab_config)
         config_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Source Selection header with Thread configuration
         source_header_layout = QHBoxLayout()
         source_header_layout.addWidget(QLabel("<b>Source Selection</b>"))
         source_header_layout.addStretch()
@@ -571,7 +547,7 @@ class OCRApp(QMainWindow):
         self.combo_threads = QComboBox()
         max_cores = os.cpu_count() or 4
         self.combo_threads.addItems([str(i) for i in range(1, max_cores + 1)])
-        self.combo_threads.setCurrentText("2") # Default to 2 cores
+        self.combo_threads.setCurrentText("2") 
         self.combo_threads.currentTextChanged.connect(self.handle_thread_change)
         source_header_layout.addWidget(self.combo_threads)
         
@@ -598,6 +574,21 @@ class OCRApp(QMainWindow):
         
         self.screen_widget.hide()
         config_layout.addWidget(self.screen_widget)
+
+        # --- PROFILE MANAGEMENT (NEW) ---
+        profile_layout = QHBoxLayout()
+        self.btn_load_prof = QPushButton("Load Profile")
+        self.btn_save_prof = QPushButton("Save Profile")
+        self.btn_save_def = QPushButton("Set as Default")
+        
+        self.btn_load_prof.clicked.connect(self.load_profile_dialog)
+        self.btn_save_prof.clicked.connect(self.save_profile_dialog)
+        self.btn_save_def.clicked.connect(self.save_default_workspace)
+        
+        profile_layout.addWidget(self.btn_load_prof)
+        profile_layout.addWidget(self.btn_save_prof)
+        profile_layout.addWidget(self.btn_save_def)
+        config_layout.addLayout(profile_layout)
 
         # --- TABLE WITH 3 COLUMNS AND SIDE BUTTONS ---
         table_layout = QHBoxLayout()
@@ -768,6 +759,67 @@ class OCRApp(QMainWindow):
 
         self.enable_properties_panel(False)
 
+    # --- PROFILE MANAGEMENT LOGIC ---
+    def save_profile_dialog(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Profile", "", "JSON Files (*.json)")
+        if path:
+            try:
+                with open(path, 'w') as f:
+                    json.dump(self.preview_overlay.rois, f, indent=4)
+                QMessageBox.information(self, "Success", "Profile saved successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save profile: {e}")
+
+    def load_profile_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Profile", "", "JSON Files (*.json)")
+        if path:
+            self.load_profile(path)
+
+    def save_default_workspace(self):
+        default_path = os.path.join(current_dir, "default_workspace.json")
+        try:
+            with open(default_path, 'w') as f:
+                json.dump(self.preview_overlay.rois, f, indent=4)
+            self.btn_save_def.setStyleSheet("background-color: #2ecc71; color: white;")
+            self.btn_save_def.setText("Saved!")
+            QApplication.processEvents()
+            time.sleep(0.5)
+            self.btn_save_def.setStyleSheet("background-color: #383838; color: white;")
+            self.btn_save_def.setText("Set as Default")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to set default: {e}")
+
+    def load_default_workspace(self):
+        default_path = os.path.join(current_dir, "default_workspace.json")
+        if os.path.exists(default_path):
+            self.load_profile(default_path)
+
+    def load_profile(self, path):
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            
+            # Reset UI States
+            self.preview_overlay.selected_id = None
+            self.enable_properties_panel(False)
+            
+            # Inject Data
+            self.preview_overlay.rois = data
+            
+            # Fix area counter so new boxes don't overlap IDs
+            if data:
+                max_id = max(roi['id'] for roi in data)
+                self.preview_overlay.area_counter = max_id + 1
+            else:
+                self.preview_overlay.area_counter = 1
+                
+            self.sync_table_to_rois(data)
+            self.preview_overlay.update()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load profile: {e}")
+
+
+    # --- EXISTING LOGIC ---
     def handle_thread_change(self, value):
         self.engine.set_thread_count(int(value))
 
@@ -780,18 +832,15 @@ class OCRApp(QMainWindow):
 
     def on_table_item_changed(self, item):
         if self.internal_update: return
-        
         if item.column() == 1:
             roi_id = item.data(Qt.ItemDataRole.UserRole)
             new_name = item.text().strip()
-            
             for roi in self.preview_overlay.rois:
                 if roi['id'] == roi_id:
                     roi['name'] = new_name
                     if self.preview_overlay.selected_id == roi_id:
                         self.lbl_target.setText(new_name if new_name else "Unnamed Field")
                     break
-                    
             self.preview_overlay.update()
             self.engine.update_rois(self.preview_overlay.rois)
 
