@@ -23,7 +23,10 @@ os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
 # ==========================================================
 # SET YOUR TESSERACT PATH HERE
 # ==========================================================
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+current_dir = os.path.dirname(os.path.abspath(__file__))
+tesseract_path = os.path.join(current_dir, "Tesseract-OCR", "tesseract.exe")
+pytesseract.pytesseract.tesseract_cmd = tesseract_path
+os.environ["TESSDATA_PREFIX"] = os.path.join(current_dir, "Tesseract-OCR", "tessdata")
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
