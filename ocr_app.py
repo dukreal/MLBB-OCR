@@ -9,6 +9,8 @@ import pytesseract
 import pygetwindow as gw
 import ctypes
 from ctypes import wintypes
+import concurrent.futures
+
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
@@ -23,10 +25,15 @@ os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
 # ==========================================================
 # SET YOUR TESSERACT PATH HERE
 # ==========================================================
+# Look for Tesseract in the local folder, fallback to default if missing
 current_dir = os.path.dirname(os.path.abspath(__file__))
-tesseract_path = os.path.join(current_dir, "Tesseract-OCR", "tesseract.exe")
-pytesseract.pytesseract.tesseract_cmd = tesseract_path
-os.environ["TESSDATA_PREFIX"] = os.path.join(current_dir, "Tesseract-OCR", "tessdata")
+local_tess = os.path.join(current_dir, "Tesseract-OCR", "tesseract.exe")
+if os.path.exists(local_tess):
+    pytesseract.pytesseract.tesseract_cmd = local_tess
+    os.environ["TESSDATA_PREFIX"] = os.path.join(current_dir, "Tesseract-OCR", "tessdata")
+else:
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -260,7 +267,6 @@ class ROIOverlayWidget(QWidget):
         self.drag_state = None
         self.last_mouse_pos = None
 
-
 class CaptureEngine(QThread):
     frame_signal = pyqtSignal(np.ndarray)
     ocr_signal = pyqtSignal(dict, dict) 
@@ -275,6 +281,19 @@ class CaptureEngine(QThread):
         self.ocr_counter = 0
         self._new_source_requested = False
         self.active_rois = []
+        
+        # CPU Threads Configuration
+        self.thread_count = 2
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
+        self.active_futures = []
+
+    def set_thread_count(self, count):
+        """Dynamically adjusts the number of CPU cores used for OCR processing."""
+        self.thread_count = count
+        if self.executor:
+            self.executor.shutdown(wait=False)
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
+        self.active_futures = [] # Reset active tracking
 
     def set_source_video(self, path):
         self.source_type = "video"
@@ -339,6 +358,44 @@ class CaptureEngine(QThread):
                 processed = cv2.dilate(processed, kernel, iterations=1)
         return processed
 
+    def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time):
+        """Worker function that runs on a separate CPU core."""
+        extracted_data = {}
+        areas_scanned = 0
+        
+        for roi in rois_copy:
+            if roi['id'] in previews_copy:
+                areas_scanned += 1
+                processed = previews_copy[roi['id']]
+                config = "--psm 6"
+                if roi['type'] == 'Numbers Only':
+                    config = "-c tessedit_char_whitelist=0123456789 --psm 6"
+                elif roi['type'] == 'Time Format':
+                    config = "-c tessedit_char_whitelist=0123456789:. --psm 6"
+                    
+                data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
+                words = []
+                req_conf = roi['confidence'] * 10 
+                for i in range(len(data['text'])):
+                    conf = int(data['conf'][i])
+                    word = data['text'][i].strip()
+                    if word and conf >= req_conf:
+                        words.append(word)
+                        
+                text = " ".join(words)
+                if text:
+                    safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
+                    extracted_data[safe_name] = text
+                    
+        ocr_end_time = time.time()
+        if extracted_data:
+            process_ms = int((ocr_end_time - ocr_start_time) * 1000)
+            metadata = {
+                "process_time_ms": process_ms,
+                "areas_scanned": areas_scanned
+            }
+            self.ocr_signal.emit(metadata, extracted_data)
+
     def run(self):
         self.running = True
         with mss.mss() as sct:
@@ -353,6 +410,7 @@ class CaptureEngine(QThread):
                 if self._new_source_requested:
                     if cap is not None: cap.release(); cap = None
                     self._new_source_requested = False
+                    self.ocr_counter = 0
 
                 frame = None
 
@@ -401,9 +459,9 @@ class CaptureEngine(QThread):
                     
                     previews = {}
                     fh, fw = frame.shape[:2]
-                    for roi in self.active_rois:
-                        if not roi['is_on_scene']: continue 
-
+                    scene_rois = [r for r in self.active_rois if r['is_on_scene']]
+                    
+                    for roi in scene_rois:
                         nx, ny, nw, nh = roi['rect']
                         x, y, w, h = int(nx * fw), int(ny * fh), int(nw * fw), int(nh * fh)
                         crop = frame[max(0, y):y+h, max(0, x):x+w]
@@ -414,63 +472,41 @@ class CaptureEngine(QThread):
 
                     if self.ocr_enabled:
                         self.ocr_counter += 1
-                        if self.ocr_counter >= int(target_fps): 
+                        
+                        # Set to trigger roughly 10 times a second
+                        trigger_frames = max(1, int(target_fps / 10)) 
+                        
+                        if self.ocr_counter >= trigger_frames: 
+                            # Clean out completed threads
+                            self.active_futures = [f for f in self.active_futures if not f.done()]
                             
-                            ocr_start_time = time.time() 
-                            extracted_data = {}
-                            areas_scanned = 0
-                            
-                            scene_rois = [r for r in self.active_rois if r['is_on_scene']]
-
-                            if not scene_rois:
-                                gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                                text = pytesseract.image_to_string(gray).strip()
-                                if text: 
-                                    extracted_data["Full_Screen"] = text
-                                    areas_scanned = 1
-                            else:
-                                for roi in scene_rois:
-                                    if roi['id'] in previews:
-                                        areas_scanned += 1
-                                        processed = previews[roi['id']]
-                                        config = "--psm 6"
-                                        if roi['type'] == 'Numbers Only':
-                                            config = "-c tessedit_char_whitelist=0123456789 --psm 6"
-                                        elif roi['type'] == 'Time Format':
-                                            config = "-c tessedit_char_whitelist=0123456789:. --psm 6"
-                                            
-                                        data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
-                                        words = []
-                                        req_conf = roi['confidence'] * 10 
-                                        for i in range(len(data['text'])):
-                                            conf = int(data['conf'][i])
-                                            word = data['text'][i].strip()
-                                            if word and conf >= req_conf:
-                                                words.append(word)
-                                                
-                                        text = " ".join(words)
-                                        if text:
-                                            safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
-                                            extracted_data[safe_name] = text
-                            
-                            ocr_end_time = time.time()
-                            
-                            # Always emit metadata so the UI ping updates, even if nothing was extracted
-                            process_ms = int((ocr_end_time - ocr_start_time) * 1000)
-                            metadata = {
-                                "process_time_ms": process_ms,
-                                "areas_scanned": areas_scanned
-                            }
-                            self.ocr_signal.emit(metadata, extracted_data)
+                            # Only spawn a new task if we haven't maxed out the CPU pool
+                            if len(self.active_futures) < self.thread_count:
+                                if scene_rois:
+                                    ocr_start_time = time.time() 
+                                    
+                                    # Deep copy to prevent memory modification issues in the thread
+                                    rois_copy = [r.copy() for r in scene_rois]
+                                    prev_copy = {k: v.copy() for k, v in previews.items()}
+                                    
+                                    future = self.executor.submit(
+                                        self._run_ocr_background, 
+                                        rois_copy, 
+                                        prev_copy, 
+                                        ocr_start_time
+                                    )
+                                    self.active_futures.append(future)
                             
                             self.ocr_counter = 0
                 
+                # 4. DYNAMIC SLEEP
                 elapsed_time_ms = (time.time() - loop_start) * 1000
                 target_delay_ms = 1000.0 / target_fps
                 sleep_time = int(max(1, target_delay_ms - elapsed_time_ms))
                 self.msleep(sleep_time)
 
             if cap: cap.release()
+            self.executor.shutdown(wait=False)
 
     def stop(self):
         self.running = False
@@ -481,8 +517,6 @@ class OCRApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("Pro OCR Application")
         self.setMinimumSize(1400, 900)
-        
-        # Increase Base Font Size Here
         self.setStyleSheet("""
             QMainWindow { background-color: #1e1e1e; } 
             QLabel { color: #ccc; font-size: 13px; }
@@ -511,7 +545,7 @@ class OCRApp(QMainWindow):
 
         # --- LEFT PANEL ---
         left_container = QWidget()
-        left_container.setFixedWidth(440) # Slightly wider for the new font sizes
+        left_container.setFixedWidth(440) 
         left_container.setStyleSheet("background-color: #242424; border-right: 1px solid #333;")
         left_master_layout = QVBoxLayout(left_container)
         left_master_layout.setContentsMargins(8, 8, 8, 8)
@@ -528,13 +562,26 @@ class OCRApp(QMainWindow):
         config_layout = QVBoxLayout(tab_config)
         config_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        config_layout.addWidget(QLabel("<b>Source Selection</b>"))
+        # Source Selection header with Thread configuration
+        source_header_layout = QHBoxLayout()
+        source_header_layout.addWidget(QLabel("<b>Source Selection</b>"))
+        source_header_layout.addStretch()
+        
+        source_header_layout.addWidget(QLabel("CPU Threads:"))
+        self.combo_threads = QComboBox()
+        max_cores = os.cpu_count() or 4
+        self.combo_threads.addItems([str(i) for i in range(1, max_cores + 1)])
+        self.combo_threads.setCurrentText("2") # Default to 2 cores
+        self.combo_threads.currentTextChanged.connect(self.handle_thread_change)
+        source_header_layout.addWidget(self.combo_threads)
+        
+        config_layout.addLayout(source_header_layout)
+
         self.combo_source = QComboBox()
         self.combo_source.addItems(["Select Source", "Open a Video File", "Screen Capture"])
         self.combo_source.currentIndexChanged.connect(self.handle_source_change)
         config_layout.addWidget(self.combo_source)
 
-        # Updated Screen Selection Layout (Dropdown + Refresh Button)
         self.screen_widget = QWidget()
         screen_layout = QHBoxLayout(self.screen_widget)
         screen_layout.setContentsMargins(0, 0, 0, 5)
@@ -565,7 +612,7 @@ class OCRApp(QMainWindow):
         self.roi_table.verticalHeader().setVisible(False)
         self.roi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.roi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.roi_table.setFixedHeight(160) # Taller for bigger fonts
+        self.roi_table.setFixedHeight(160) 
         self.roi_table.setStyleSheet("""
             QTableWidget { background-color: #1e1e1e; color: white; border: 1px solid #444; gridline-color: #333; font-size: 13px; }
             QHeaderView::section { background-color: #333; color: white; border: none; padding: 4px; font-weight: bold; }
@@ -682,7 +729,6 @@ class OCRApp(QMainWindow):
             
         output_layout.addWidget(self.meta_card)
 
-        # SetPlainText Box instead of Append Box
         self.ocr_output = QTextEdit()
         self.ocr_output.setReadOnly(True)
         self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 15px; border: 1px solid #333;")
@@ -721,6 +767,9 @@ class OCRApp(QMainWindow):
         layout.addWidget(self.scroll_area, stretch=1)
 
         self.enable_properties_panel(False)
+
+    def handle_thread_change(self, value):
+        self.engine.set_thread_count(int(value))
 
     def reset_to_defaults(self):
         if self.preview_overlay.selected_id is None: return
@@ -896,7 +945,7 @@ class OCRApp(QMainWindow):
             h, w = processed.shape
             q_img = QImage(processed.data, w, h, w, QImage.Format.Format_Grayscale8)
             pixmap = QPixmap.fromImage(q_img)
-            scaled = pixmap.scaled(350, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled = pixmap.scaled(340, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.lbl_crop_preview.setPixmap(scaled)
 
     def update_ocr_text(self, metadata, data_dict):
@@ -905,7 +954,6 @@ class OCRApp(QMainWindow):
         
         self.internal_update = True
         
-        # Build the static JSON dictionary directly from the table structure
         display_dict = {}
         
         for i in range(self.roi_table.rowCount()):
@@ -913,21 +961,17 @@ class OCRApp(QMainWindow):
             roi_id = self.roi_table.item(i, 1).data(Qt.ItemDataRole.UserRole)
             safe_name = field_name if field_name else f"Area_{roi_id}"
             
-            # Use current text in the UI as a fallback (keeps last known good value)
             current_value = self.roi_table.item(i, 2).text()
             
-            # If the engine extracted a new value this frame, overwrite it
             if safe_name in data_dict:
                 new_val = data_dict[safe_name]
                 self.roi_table.item(i, 2).setText(new_val)
                 display_dict[safe_name] = new_val
             else:
-                # Keep old value in JSON
                 display_dict[safe_name] = current_value
                 
         self.internal_update = False
         
-        # Replace entire text block instead of appending (No Scrolling)
         formatted_json = json.dumps(display_dict, indent=4)
         self.ocr_output.setPlainText(formatted_json)
 
