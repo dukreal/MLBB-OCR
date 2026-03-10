@@ -16,23 +16,28 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon
 
 # --- DPI Scaling Fixes ---
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
 
 # ==========================================================
-# SET YOUR TESSERACT PATH HERE
+# SET TESSERACT PATH (PyInstaller Compatible)
 # ==========================================================
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# This checks if we are running as a compiled .exe or as a Python script
+if getattr(sys, 'frozen', False):
+    current_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
 local_tess = os.path.join(current_dir, "Tesseract-OCR", "tesseract.exe")
+
 if os.path.exists(local_tess):
     pytesseract.pytesseract.tesseract_cmd = local_tess
     os.environ["TESSDATA_PREFIX"] = os.path.join(current_dir, "Tesseract-OCR", "tessdata")
 else:
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -279,17 +284,17 @@ class CaptureEngine(QThread):
         self.source_path = None  
         self.ocr_counter = 0
         self._new_source_requested = False
-        self.active_rois = []
+        self.active_rois =[]
         self.thread_count = 2
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
-        self.active_futures = []
+        self.active_futures =[]
 
     def set_thread_count(self, count):
         self.thread_count = count
         if self.executor:
             self.executor.shutdown(wait=False)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
-        self.active_futures = [] 
+        self.active_futures =[] 
 
     def set_source_video(self, path):
         self.source_type = "video"
@@ -354,34 +359,52 @@ class CaptureEngine(QThread):
                 processed = cv2.dilate(processed, kernel, iterations=1)
         return processed
 
+    def _process_single_roi(self, roi, processed_img):
+        """Helper function to process a single ROI in its own thread."""
+        # Using --psm 7 (Treat as a single text line) instead of 6 for massive speed boost
+        config = "--psm 7"
+        if roi['type'] == 'Numbers Only':
+            config = "-c tessedit_char_whitelist=0123456789 --psm 7"
+        elif roi['type'] == 'Time Format':
+            config = "-c tessedit_char_whitelist=0123456789:. --psm 7"
+            
+        data = pytesseract.image_to_data(processed_img, config=config, output_type=pytesseract.Output.DICT)
+        words = []
+        req_conf = roi['confidence'] * 10 
+        
+        for i in range(len(data['text'])):
+            conf = int(data['conf'][i])
+            word = data['text'][i].strip()
+            if word and conf >= req_conf:
+                words.append(word)
+                
+        text = " ".join(words)
+        return roi, text
+
     def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time):
+        """Processes all ROIs for the current frame concurrently."""
         extracted_data = {}
         areas_scanned = 0
         
-        for roi in rois_copy:
-            if roi['id'] in previews_copy:
-                areas_scanned += 1
-                processed = previews_copy[roi['id']]
-                config = "--psm 6"
-                if roi['type'] == 'Numbers Only':
-                    config = "-c tessedit_char_whitelist=0123456789 --psm 6"
-                elif roi['type'] == 'Time Format':
-                    config = "-c tessedit_char_whitelist=0123456789:. --psm 6"
-                    
-                data = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
-                words = []
-                req_conf = roi['confidence'] * 10 
-                for i in range(len(data['text'])):
-                    conf = int(data['conf'][i])
-                    word = data['text'][i].strip()
-                    if word and conf >= req_conf:
-                        words.append(word)
+        # Filter to only the ROIs that have a processed preview image
+        active_rois = [roi for roi in rois_copy if roi['id'] in previews_copy]
+        
+        if active_rois:
+            # Spawn a thread pool specifically to process all these active ROIs at the exact same time
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(active_rois)) as executor:
+                futures =[]
+                for roi in active_rois:
+                    areas_scanned += 1
+                    processed = previews_copy[roi['id']]
+                    futures.append(executor.submit(self._process_single_roi, roi, processed))
+                
+                # Gather the results as they finish processing
+                for future in concurrent.futures.as_completed(futures):
+                    roi, text = future.result()
+                    if text:
+                        safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
+                        extracted_data[safe_name] = text
                         
-                text = " ".join(words)
-                if text:
-                    safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
-                    extracted_data[safe_name] = text
-                    
         ocr_end_time = time.time()
         if extracted_data:
             process_ms = int((ocr_end_time - ocr_start_time) * 1000)
@@ -448,7 +471,7 @@ class CaptureEngine(QThread):
                     
                     previews = {}
                     fh, fw = frame.shape[:2]
-                    scene_rois = [r for r in self.active_rois if r['is_on_scene']]
+                    scene_rois =[r for r in self.active_rois if r['is_on_scene']]
                     
                     for roi in scene_rois:
                         nx, ny, nw, nh = roi['rect']
@@ -468,7 +491,7 @@ class CaptureEngine(QThread):
                             if len(self.active_futures) < self.thread_count:
                                 if scene_rois:
                                     ocr_start_time = time.time() 
-                                    rois_copy = [r.copy() for r in scene_rois]
+                                    rois_copy =[r.copy() for r in scene_rois]
                                     prev_copy = {k: v.copy() for k, v in previews.items()}
                                     future = self.executor.submit(self._run_ocr_background, rois_copy, prev_copy, ocr_start_time)
                                     self.active_futures.append(future)
@@ -490,6 +513,12 @@ class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pro OCR Application")
+
+        icon_path = os.path.join(current_dir, "app_icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
+
         self.setMinimumSize(1400, 900)
         self.setStyleSheet("""
             QMainWindow { background-color: #1e1e1e; } 
