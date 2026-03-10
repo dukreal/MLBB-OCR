@@ -1,4 +1,6 @@
 import os
+os.environ["OMP_THREAD_LIMIT"] = "1"
+
 import sys
 import cv2
 import mss
@@ -360,25 +362,19 @@ class CaptureEngine(QThread):
         return processed
 
     def _process_single_roi(self, roi, processed_img):
-        """Helper function to process a single ROI in its own thread."""
-        # Using --psm 7 (Treat as a single text line) instead of 6 for massive speed boost
+        """Ultra-fast OCR using image_to_string instead of image_to_data"""
         config = "--psm 7"
         if roi['type'] == 'Numbers Only':
             config = "-c tessedit_char_whitelist=0123456789 --psm 7"
         elif roi['type'] == 'Time Format':
             config = "-c tessedit_char_whitelist=0123456789:. --psm 7"
             
-        data = pytesseract.image_to_data(processed_img, config=config, output_type=pytesseract.Output.DICT)
-        words = []
-        req_conf = roi['confidence'] * 10 
+        # image_to_string is 2x to 3x faster than image_to_data
+        text = pytesseract.image_to_string(processed_img, config=config).strip()
         
-        for i in range(len(data['text'])):
-            conf = int(data['conf'][i])
-            word = data['text'][i].strip()
-            if word and conf >= req_conf:
-                words.append(word)
-                
-        text = " ".join(words)
+        # Remove empty lines or random garbage noise
+        text = " ".join(text.split()) 
+        
         return roi, text
 
     def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time):
