@@ -454,12 +454,18 @@ class CaptureEngine(QThread):
                     try:
                         wins = gw.getWindowsWithTitle(self.source_path)
                         if wins and not wins[0].isMinimized:
-                            frame = self.capture_window_direct(wins[0]._hWnd)
-                            if frame is None:
-                                win = wins[0]
-                                screenshot = sct.grab({"top": win.top, "left": win.left, "width": win.width, "height": win.height})
+                            win = wins[0]
+                            frame = self.capture_window_direct(win._hWnd)
+                            
+                            # EMULATOR FIX: Check if the PrintWindow capture failed OR if it captured a mostly black/blank screen
+                            # If the max pixel value is < 15, it's a black screen (OpenGL trap). 
+                            if frame is None or frame.max() < 15:
+                                # Force MSS to grab what is visibly on the monitor
+                                # Note: The emulator MUST be visible on your screen for this to work
+                                bounding_box = {"top": win.top, "left": win.left, "width": win.width, "height": win.height}
+                                screenshot = sct.grab(bounding_box)
                                 frame = np.array(screenshot)
-                    except:
+                    except Exception as e:
                         pass
 
                 if frame is not None:
