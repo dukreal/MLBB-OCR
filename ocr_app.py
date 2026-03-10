@@ -383,7 +383,7 @@ class CaptureEngine(QThread):
         extracted_data = {}
         areas_scanned = 0
         
-        active_rois =[roi for roi in rois_copy if roi['id'] in previews_copy]
+        active_rois = [roi for roi in rois_copy if roi['id'] in previews_copy]
         
         if active_rois:
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(active_rois)) as executor:
@@ -510,14 +510,18 @@ class CaptureEngine(QThread):
                                     rois_copy =[r.copy() for r in scene_rois]
                                     prev_copy = {k: v.copy() for k, v in previews.items()}
                                     
-                                    future = self.executor.submit(
-                                        self._run_ocr_background, 
-                                        rois_copy, 
-                                        prev_copy, 
-                                        ocr_start_time, 
-                                        self.current_fps # <--- Passing current FPS
-                                    )
-                                    self.active_futures.append(future)
+                                    try:
+                                        future = self.executor.submit(
+                                            self._run_ocr_background, 
+                                            rois_copy, 
+                                            prev_copy, 
+                                            ocr_start_time, 
+                                            self.current_fps # <--- Passing current FPS
+                                        )
+                                        self.active_futures.append(future)
+                                    except RuntimeError:
+                                        # Ignore the task if the thread pool is currently resetting
+                                        pass
                             self.ocr_counter = 0
                 
                 elapsed_time_ms = (time.time() - loop_start) * 1000
@@ -526,11 +530,11 @@ class CaptureEngine(QThread):
                 self.msleep(sleep_time)
 
             if cap: cap.release()
-            self.executor.shutdown(wait=False)
+            # Note: Removed the executor.shutdown() line here to prevent RuntimeError crashes
 
     def stop(self):
         self.running = False
-
+        
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
