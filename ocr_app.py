@@ -290,6 +290,11 @@ class CaptureEngine(QThread):
         self.thread_count = 2
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count)
         self.active_futures =[]
+        
+        # --- FPS Tracker Variables ---
+        self.fps_start_time = time.time()
+        self.fps_counter = 0
+        self.current_fps = 0
 
     def set_thread_count(self, count):
         self.thread_count = count
@@ -362,31 +367,25 @@ class CaptureEngine(QThread):
         return processed
 
     def _process_single_roi(self, roi, processed_img):
-        """Ultra-fast OCR using image_to_string instead of image_to_data"""
+        """Ultra-fast OCR using image_to_string"""
         config = "--psm 7"
         if roi['type'] == 'Numbers Only':
             config = "-c tessedit_char_whitelist=0123456789 --psm 7"
         elif roi['type'] == 'Time Format':
             config = "-c tessedit_char_whitelist=0123456789:. --psm 7"
             
-        # image_to_string is 2x to 3x faster than image_to_data
         text = pytesseract.image_to_string(processed_img, config=config).strip()
-        
-        # Remove empty lines or random garbage noise
         text = " ".join(text.split()) 
-        
         return roi, text
 
-    def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time):
-        """Processes all ROIs for the current frame concurrently."""
+    def _run_ocr_background(self, rois_copy, previews_copy, ocr_start_time, current_fps):
+        """Processes all ROIs concurrently and emits the current video FPS."""
         extracted_data = {}
         areas_scanned = 0
         
-        # Filter to only the ROIs that have a processed preview image
-        active_rois = [roi for roi in rois_copy if roi['id'] in previews_copy]
+        active_rois =[roi for roi in rois_copy if roi['id'] in previews_copy]
         
         if active_rois:
-            # Spawn a thread pool specifically to process all these active ROIs at the exact same time
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(active_rois)) as executor:
                 futures =[]
                 for roi in active_rois:
@@ -394,7 +393,6 @@ class CaptureEngine(QThread):
                     processed = previews_copy[roi['id']]
                     futures.append(executor.submit(self._process_single_roi, roi, processed))
                 
-                # Gather the results as they finish processing
                 for future in concurrent.futures.as_completed(futures):
                     roi, text = future.result()
                     if text:
@@ -404,7 +402,13 @@ class CaptureEngine(QThread):
         ocr_end_time = time.time()
         if extracted_data:
             process_ms = int((ocr_end_time - ocr_start_time) * 1000)
-            metadata = {"process_time_ms": process_ms, "areas_scanned": areas_scanned}
+            
+            # --- Pass current FPS in metadata ---
+            metadata = {
+                "process_time_ms": process_ms, 
+                "areas_scanned": areas_scanned, 
+                "fps": current_fps
+            }
             self.ocr_signal.emit(metadata, extracted_data)
 
     def run(self):
@@ -414,6 +418,11 @@ class CaptureEngine(QThread):
             target_fps = 30.0 
             video_start_time = 0
             total_frames = 0
+            
+            # Reset FPS Trackers
+            self.fps_start_time = time.time()
+            self.fps_counter = 0
+            self.current_fps = 0
 
             while self.running:
                 loop_start = time.time() 
@@ -457,11 +466,8 @@ class CaptureEngine(QThread):
                             win = wins[0]
                             frame = self.capture_window_direct(win._hWnd)
                             
-                            # EMULATOR FIX: Check if the PrintWindow capture failed OR if it captured a mostly black/blank screen
-                            # If the max pixel value is < 15, it's a black screen (OpenGL trap). 
+                            # EMULATOR FIX: Black screen check fallback
                             if frame is None or frame.max() < 15:
-                                # Force MSS to grab what is visibly on the monitor
-                                # Note: The emulator MUST be visible on your screen for this to work
                                 bounding_box = {"top": win.top, "left": win.left, "width": win.width, "height": win.height}
                                 screenshot = sct.grab(bounding_box)
                                 frame = np.array(screenshot)
@@ -469,6 +475,14 @@ class CaptureEngine(QThread):
                         pass
 
                 if frame is not None:
+                    # --- Calculate the Live FPS ---
+                    self.fps_counter += 1
+                    current_time = time.time()
+                    if current_time - self.fps_start_time >= 1.0: # Every 1 second
+                        self.current_fps = self.fps_counter
+                        self.fps_counter = 0
+                        self.fps_start_time = current_time
+
                     self.frame_signal.emit(frame)
                     
                     previews = {}
@@ -495,7 +509,14 @@ class CaptureEngine(QThread):
                                     ocr_start_time = time.time() 
                                     rois_copy =[r.copy() for r in scene_rois]
                                     prev_copy = {k: v.copy() for k, v in previews.items()}
-                                    future = self.executor.submit(self._run_ocr_background, rois_copy, prev_copy, ocr_start_time)
+                                    
+                                    future = self.executor.submit(
+                                        self._run_ocr_background, 
+                                        rois_copy, 
+                                        prev_copy, 
+                                        ocr_start_time, 
+                                        self.current_fps # <--- Passing current FPS
+                                    )
                                     self.active_futures.append(future)
                             self.ocr_counter = 0
                 
@@ -509,7 +530,6 @@ class CaptureEngine(QThread):
 
     def stop(self):
         self.running = False
-
 
 class OCRApp(QMainWindow):
     def __init__(self):
@@ -741,13 +761,15 @@ class OCRApp(QMainWindow):
         self.meta_card.setStyleSheet("background-color: #222; border-radius: 4px; border: 1px solid #444; padding: 4px;")
         meta_layout = QHBoxLayout(self.meta_card)
         
+        self.lbl_meta_frames = QLabel("Frames: 0")
         self.lbl_meta_ping = QLabel("Processing: -- ms")
         self.lbl_meta_areas = QLabel("Scanned: 0")
         
-        for lbl in [self.lbl_meta_ping, self.lbl_meta_areas]:
+        for lbl in[self.lbl_meta_frames, self.lbl_meta_ping, self.lbl_meta_areas]:
             lbl.setStyleSheet("color: #aaa; font-weight: bold; font-size: 14px; border: none;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             meta_layout.addWidget(lbl)
+
             
         output_layout.addWidget(self.meta_card)
 
@@ -1029,6 +1051,8 @@ class OCRApp(QMainWindow):
             self.lbl_crop_preview.setPixmap(scaled)
 
     def update_ocr_text(self, metadata, data_dict):
+        # Update UI labels
+        self.lbl_meta_frames.setText(f"FPS: {metadata.get('fps', 0)}")
         self.lbl_meta_ping.setText(f"Processing: {metadata.get('process_time_ms', '--')} ms")
         self.lbl_meta_areas.setText(f"Scanned: {metadata.get('areas_scanned', 0)}")
         
