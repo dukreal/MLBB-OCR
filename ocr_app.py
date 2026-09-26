@@ -778,6 +778,8 @@ class CaptureEngine(QThread):
             config = "-c tessedit_char_whitelist=0123456789:. --psm 7"
         elif roi['type'] == 'KDA (K/D/A)':
             config = "-c tessedit_char_whitelist=0123456789/ --psm 7"
+        elif roi['type'] == 'Gold Amount (K/M)':
+            config = "-c tessedit_char_whitelist=0123456789kKmM --psm 7"
 
         data = pytesseract.image_to_data(
             processed_img, config=config,
@@ -1268,13 +1270,21 @@ class OCRApp(QMainWindow):
 
         grid.addWidget(QLabel("Format"), 0, 0)
         self.combo_type = QComboBox()
-        self.combo_type.addItems(["General Text", "Numbers Only", "Time Format", "KDA (K/D/A)"])
+        self.combo_type.addItems(["General Text", "Numbers Only", "Time Format", "KDA (K/D/A)", "Gold Amount (K/M)"])
         self.combo_type.currentIndexChanged.connect(self.sync_properties)
         grid.addWidget(self.combo_type, 0, 1)
 
         self.sl_thresh = QSlider(Qt.Orientation.Horizontal)
         self.sl_thick = QSlider(Qt.Orientation.Horizontal)
         self.sl_conf = QSlider(Qt.Orientation.Horizontal)
+
+        # Live number readouts next to each slider.
+        self.lbl_thresh_val = QLabel("1")
+        self.lbl_thick_val = QLabel("5")
+        self.lbl_conf_val = QLabel("60%")
+        for lbl in [self.lbl_thresh_val, self.lbl_thick_val, self.lbl_conf_val]:
+            lbl.setFixedWidth(40)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         for sl in [self.sl_thresh, self.sl_thick, self.sl_conf]:
             sl.setRange(1, 10)
@@ -1283,14 +1293,21 @@ class OCRApp(QMainWindow):
             sl.valueChanged.connect(self.sync_properties)
             sl.setStyleSheet("QSlider::handle:horizontal { background: #888; width: 12px; border-radius: 6px; }")
 
+        self.sl_thresh.valueChanged.connect(lambda v: self.lbl_thresh_val.setText(str(v)))
+        self.sl_thick.valueChanged.connect(lambda v: self.lbl_thick_val.setText(str(v)))
+        self.sl_conf.valueChanged.connect(lambda v: self.lbl_conf_val.setText(f"{v * 10}%"))
+
         grid.addWidget(QLabel("Binarize"), 1, 0)
         grid.addWidget(self.sl_thresh, 1, 1)
+        grid.addWidget(self.lbl_thresh_val, 1, 2)
 
         grid.addWidget(QLabel("Cleanup/Dilate"), 2, 0)
         grid.addWidget(self.sl_thick, 2, 1)
+        grid.addWidget(self.lbl_thick_val, 2, 2)
 
         grid.addWidget(QLabel("Conf. Th"), 3, 0)
         grid.addWidget(self.sl_conf, 3, 1)
+        grid.addWidget(self.lbl_conf_val, 3, 2)
 
         props_main_layout.addLayout(grid)
 
@@ -1438,6 +1455,9 @@ class OCRApp(QMainWindow):
         self.sl_thresh.setValue(1)  
         self.sl_thick.setValue(5)   
         self.sl_conf.setValue(6)    
+        self.lbl_thresh_val.setText("1")
+        self.lbl_thick_val.setText("5")
+        self.lbl_conf_val.setText("60%") 
 
     def on_table_item_changed(self, item):
         if self.internal_update: return
@@ -1649,6 +1669,12 @@ class OCRApp(QMainWindow):
             self.sl_thresh.setValue(roi['threshold'])
             self.sl_thick.setValue(roi['thickness'])
             self.sl_conf.setValue(roi['confidence'])
+
+            # setValue() above won't fire valueChanged if the number is
+            # unchanged between ROIs, so refresh the readouts explicitly.
+            self.lbl_thresh_val.setText(str(roi['threshold']))
+            self.lbl_thick_val.setText(str(roi['thickness']))
+            self.lbl_conf_val.setText(f"{roi['confidence'] * 10}%")
 
             self.combo_type.blockSignals(False)
             self.sl_thresh.blockSignals(False)
