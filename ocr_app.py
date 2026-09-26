@@ -776,6 +776,8 @@ class CaptureEngine(QThread):
             config = "-c tessedit_char_whitelist=0123456789 --psm 7"
         elif roi['type'] == 'Time Format':
             config = "-c tessedit_char_whitelist=0123456789:. --psm 7"
+        elif roi['type'] == 'KDA (K/D/A)':
+            config = "-c tessedit_char_whitelist=0123456789/ --psm 7"
 
         data = pytesseract.image_to_data(
             processed_img, config=config,
@@ -1266,7 +1268,7 @@ class OCRApp(QMainWindow):
 
         grid.addWidget(QLabel("Format"), 0, 0)
         self.combo_type = QComboBox()
-        self.combo_type.addItems(["General Text", "Numbers Only", "Time Format"])
+        self.combo_type.addItems(["General Text", "Numbers Only", "Time Format", "KDA (K/D/A)"])
         self.combo_type.currentIndexChanged.connect(self.sync_properties)
         grid.addWidget(self.combo_type, 0, 1)
 
