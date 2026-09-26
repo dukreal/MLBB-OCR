@@ -1,0 +1,8 @@
+Tesseract-OCR/
+build/
+dist/
+*.log
+gold-log.txt
+raw_ocr_log.txt
+live_overlay_data.json
+__pycache__/
