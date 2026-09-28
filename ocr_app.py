@@ -1484,6 +1484,8 @@ class OCRApp(QMainWindow):
         self.btn_add_roi.setFixedSize(30, 30)
         self.btn_remove_roi = QPushButton("-")
         self.btn_remove_roi.setFixedSize(30, 30)
+        for small_btn in (self.btn_add_roi, self.btn_remove_roi):
+            small_btn.setStyleSheet("QPushButton { padding: 0px; font-size: 16px; font-weight: bold; }")
         
         btn_layout.addWidget(self.btn_add_roi)
         btn_layout.addWidget(self.btn_remove_roi)
