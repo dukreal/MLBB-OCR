@@ -1114,6 +1114,60 @@ class CaptureEngine(QThread):
     def stop(self):
         self.running = False
         
+class ReorderableTable(QTableWidget):
+    """Field table whose rows can be dragged up/down to change their order."""
+    row_moved = pyqtSignal(int, int)   # (old_row, new_row)
+
+    def __init__(self, rows, cols):
+        super().__init__(rows, cols)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QTableWidget.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        self._grab_ok = False
+        self._dragging = False
+
+    def mousePressEvent(self, event):
+        # A row can only be grabbed by its Field (col 1) or Value (col 2) cell.
+        idx = self.indexAt(event.position().toPoint())
+        self._grab_ok = idx.isValid() and idx.column() in (1, 2)
+        super().mousePressEvent(event)
+
+    def startDrag(self, supportedActions):
+        if not self._grab_ok:
+            return
+        self._dragging = True
+        try:
+            super().startDrag(supportedActions)
+        finally:
+            self._dragging = False
+
+    def dropEvent(self, event):
+        if not self._dragging:
+            event.ignore()
+            return
+        src = self.currentRow()
+        pos = event.position().toPoint()
+        idx = self.indexAt(pos)
+        if idx.isValid():
+            dst = idx.row()
+            if pos.y() > self.visualRect(idx).center().y():
+                dst += 1                      # dropped on the lower half -> insert after
+        else:
+            dst = self.rowCount()             # dropped below the last row
+        if dst > src:
+            dst -= 1                          # account for the row being removed first
+        # We move the data ourselves; tell Qt not to clear the dragged cells.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept()
+        self.viewport().update()
+        if src >= 0 and dst != src:
+            self.row_moved.emit(src, dst)
+
+
 class OCRApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1260,7 +1314,7 @@ class OCRApp(QMainWindow):
         table_layout = QHBoxLayout()
         table_layout.setSpacing(5) 
         
-        self.roi_table = QTableWidget(0, 3) 
+        self.roi_table = ReorderableTable(0, 3)
         self.roi_table.setHorizontalHeaderLabels(["", "Field", "Value"])
         self.roi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.roi_table.setColumnWidth(0, 25)
@@ -1276,7 +1330,8 @@ class OCRApp(QMainWindow):
             QTableWidget::item:selected { background-color: #2980b9; }
         """)
         self.roi_table.itemSelectionChanged.connect(self.on_table_selection)
-        self.roi_table.itemChanged.connect(self.on_table_item_changed) 
+        self.roi_table.itemChanged.connect(self.on_table_item_changed)
+        self.roi_table.row_moved.connect(self.on_table_row_moved)
         
         table_layout.addWidget(self.roi_table)
 
@@ -1563,6 +1618,29 @@ class OCRApp(QMainWindow):
                     break
             self.preview_overlay.update()
             self.engine.update_rois(self.preview_overlay.rois)
+
+    def on_table_row_moved(self, src, dst):
+        rois = self.preview_overlay.rois
+        if not (0 <= src < len(rois) and 0 <= dst < len(rois)):
+            return
+
+        # Remember each field's current value so it travels with its row.
+        values = {}
+        for i in range(self.roi_table.rowCount()):
+            name_item = self.roi_table.item(i, 1)
+            val_item = self.roi_table.item(i, 2)
+            if name_item and val_item:
+                values[name_item.data(Qt.ItemDataRole.UserRole)] = val_item.text()
+
+        rois.insert(dst, rois.pop(src))       # reorder the real data
+        self.sync_table_to_rois(rois)         # rebuild the table + update the OCR engine
+
+        self.internal_update = True
+        for i in range(self.roi_table.rowCount()):
+            rid = self.roi_table.item(i, 1).data(Qt.ItemDataRole.UserRole)
+            self.roi_table.item(i, 2).setText(values.get(rid, ""))
+        self.internal_update = False
+        self.preview_overlay.update()
 
     def on_table_selection(self):
         if self.internal_update: return
