@@ -17,8 +17,9 @@ import threading
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
-                             QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
+                             QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox,
+                             QLineEdit)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon
 
 # --- DPI Scaling Fixes ---
@@ -446,6 +447,7 @@ class ROIOverlayWidget(QWidget):
         self.selected_id = None
         self.drag_state = None
         self.last_mouse_pos = None
+        self.copied_roi = None
 
     def add_field(self):
         self.rois.append({
@@ -462,6 +464,54 @@ class ROIOverlayWidget(QWidget):
         self.area_counter += 1
         self.rois_changed.emit(self.rois)
         self.roi_selected.emit(self.selected_id)
+
+    def copy_selected_field(self):
+        """Remember the selected field so it can be pasted later."""
+        if self.selected_id is None:
+            return False
+        for roi in self.rois:
+            if roi['id'] == self.selected_id:
+                self.copied_roi = dict(roi)
+                self.copied_roi['rect'] = list(roi['rect'])
+                return True
+        return False
+
+    def paste_field_centered(self):
+        """Paste the copied field, centered in the part of the canvas you can currently see."""
+        if not self.copied_roi:
+            return None
+        src = self.copied_roi
+
+        # The visible working area = the scroll area's viewport, mapped into this widget.
+        vp = self.scroll_area.viewport()
+        visible = QRect(self.mapFrom(vp, QPoint(0, 0)), vp.size()).intersected(self.rect())
+        center = visible.center() if not visible.isEmpty() else self.rect().center()
+
+        w, h = max(1, self.width()), max(1, self.height())
+        nw, nh = src['rect'][2], src['rect'][3]
+        nx = max(0.0, min(center.x() / w - nw / 2, 1.0 - nw))
+        ny = max(0.0, min(center.y() / h - nh / 2, 1.0 - nh))
+
+        # Names are the keys in the JSON output, so make the pasted name unique.
+        existing = {r['name'] for r in self.rois}
+        base = f"{src['name']} copy" if src['name'] else "Area copy"
+        new_name, n = base, 2
+        while new_name in existing:
+            new_name = f"{base} {n}"
+            n += 1
+
+        new_roi = dict(src)
+        new_roi['id'] = self.area_counter
+        new_roi['name'] = new_name
+        new_roi['rect'] = [nx, ny, nw, nh]
+        new_roi['is_on_scene'] = True
+        self.rois.append(new_roi)
+        self.selected_id = new_roi['id']
+        self.area_counter += 1
+        self.update()
+        self.rois_changed.emit(self.rois)
+        self.roi_selected.emit(self.selected_id)
+        return new_roi['id']
 
     def remove_selected_field(self):
         if self.selected_id is not None:
@@ -1093,8 +1143,15 @@ class OCRApp(QMainWindow):
         self.internal_update = False 
         self.init_ui()
         
-        self.shortcut_reset = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.shortcut_reset = QShortcut(QKeySequence("Ctrl+Shift+R"), self)
         self.shortcut_reset.activated.connect(self.preview_overlay.reset_view)
+
+        self.shortcut_rename = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.shortcut_rename.activated.connect(self.shortcut_rename_field)
+        self.shortcut_copy = QShortcut(QKeySequence("Ctrl+C"), self)
+        self.shortcut_copy.activated.connect(self.shortcut_copy_field)
+        self.shortcut_paste = QShortcut(QKeySequence("Ctrl+V"), self)
+        self.shortcut_paste.activated.connect(self.shortcut_paste_field)
         
         # Look for default workspace
         self.load_default_workspace()
@@ -1448,6 +1505,40 @@ class OCRApp(QMainWindow):
     # --- EXISTING LOGIC ---
     def handle_thread_change(self, value):
         self.engine.set_thread_count(int(value))
+
+    def _focused_text_widget(self):
+        w = QApplication.focusWidget()
+        return w if isinstance(w, (QLineEdit, QTextEdit)) else None
+
+    def shortcut_copy_field(self):
+        tw = self._focused_text_widget()
+        if tw is not None:      # normal text copy while typing / selecting text
+            tw.copy()
+            return
+        self.preview_overlay.copy_selected_field()
+
+    def shortcut_paste_field(self):
+        tw = self._focused_text_widget()
+        if tw is not None:      # normal text paste while typing
+            if not tw.isReadOnly():
+                tw.paste()
+            return
+        self.preview_overlay.paste_field_centered()
+
+    def shortcut_rename_field(self):
+        roi_id = self.preview_overlay.selected_id
+        if roi_id is None:
+            return
+        for row in range(self.roi_table.rowCount()):
+            item = self.roi_table.item(row, 1)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == roi_id:
+                self.roi_table.setCurrentItem(item)
+                self.roi_table.setFocus()
+                self.roi_table.editItem(item)
+                editor = QApplication.focusWidget()
+                if isinstance(editor, QLineEdit):
+                    editor.selectAll()
+                break
 
     def reset_to_defaults(self):
         if self.preview_overlay.selected_id is None: return
