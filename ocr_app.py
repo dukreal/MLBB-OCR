@@ -1316,11 +1316,13 @@ class OCRApp(QMainWindow):
 
         self.setMinimumSize(1400, 900)
         self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; } 
-            QLabel { color: #ccc; font-size: 13px; }
-            QPushButton { background-color: #383838; color: white; border-radius: 4px; padding: 6px; border: 1px solid #555; font-size: 13px; }
-            QPushButton:hover { background-color: #4a4a4a; }
-            QComboBox, QLineEdit { background-color: #2a2a2a; color: white; border: 1px solid #444; padding: 5px; border-radius: 3px; font-size: 13px; }
+            QMainWindow { background-color: #17181c; }
+            QLabel { color: #d6d8db; font-size: 13px; }
+            QPushButton { background-color: #2a2c32; color: #eceef0; border-radius: 6px; padding: 8px 14px; border: 1px solid #383b42; font-size: 13px; }
+            QPushButton:hover { background-color: #34373e; border: 1px solid #46494f; }
+            QPushButton:pressed { background-color: #23252a; }
+            QComboBox, QLineEdit { background-color: #202226; color: #eceef0; border: 1px solid #34373e; padding: 6px; border-radius: 5px; font-size: 13px; }
+            QComboBox:hover, QLineEdit:hover { border: 1px solid #46494f; }
         """)
         
         self.ocr_validator = OCRValidator()
@@ -1356,15 +1358,16 @@ class OCRApp(QMainWindow):
         # --- LEFT PANEL ---
         left_container = QWidget()
         left_container.setFixedWidth(440) 
-        left_container.setStyleSheet("background-color: #242424; border-right: 1px solid #333;")
+        left_container.setStyleSheet("background-color: #1b1c20; border-right: 1px solid #2c2f36;")
         left_master_layout = QVBoxLayout(left_container)
         left_master_layout.setContentsMargins(8, 8, 8, 8)
 
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
-            QTabBar::tab { background: #2a2a2a; color: #888; padding: 8px 15px; border: 1px solid #333; border-bottom: none; font-size: 13px; }
-            QTabBar::tab:selected { background: #3a3a3a; color: white; font-weight: bold; }
-            QTabWidget::pane { border: 1px solid #333; background: #2a2a2a; }
+            QTabBar::tab { background: #202226; color: #8b8f96; padding: 9px 18px; border: 1px solid #2c2f36; border-bottom: none; font-size: 13px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+            QTabBar::tab:selected { background: #26282e; color: #eceef0; font-weight: bold; }
+            QTabBar::tab:hover:!selected { color: #c4c7cc; }
+            QTabWidget::pane { border: 1px solid #2c2f36; background: #26282e; border-radius: 0px 6px 6px 6px; }
         """)
 
         # ----- TAB 1: CONFIGURATION -----
@@ -1461,9 +1464,10 @@ class OCRApp(QMainWindow):
         self.roi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.roi_table.setFixedHeight(160) 
         self.roi_table.setStyleSheet("""
-            QTableWidget { background-color: #1e1e1e; color: white; border: 1px solid #444; gridline-color: #333; font-size: 13px; }
-            QHeaderView::section { background-color: #333; color: white; border: none; padding: 4px; font-weight: bold; }
-            QTableWidget::item:selected { background-color: #2980b9; }
+            QTableWidget { background-color: #1b1c20; color: #eceef0; border: 1px solid #2c2f36; border-radius: 6px; gridline-color: #2c2f36; font-size: 13px; }
+            QHeaderView::section { background-color: #26282e; color: #d6d8db; border: none; border-bottom: 1px solid #2c2f36; padding: 6px; font-weight: bold; }
+            QTableWidget::item { padding: 3px; }
+            QTableWidget::item:selected { background-color: #3a5f96; }
         """)
         self.roi_table.itemSelectionChanged.connect(self.on_table_selection)
         self.roi_table.itemChanged.connect(self.on_table_item_changed)
@@ -1495,7 +1499,7 @@ class OCRApp(QMainWindow):
         config_layout.addLayout(scene_btn_layout)
 
         self.props_frame = QFrame()
-        self.props_frame.setStyleSheet("QFrame { background-color: #2e2e2e; border-radius: 3px; border: 1px solid #444; margin-top: 10px; }")
+        self.props_frame.setStyleSheet("QFrame { background-color: #22242a; border-radius: 8px; border: 1px solid #2c2f36; margin-top: 10px; }")
         props_main_layout = QVBoxLayout(self.props_frame)
         props_main_layout.setContentsMargins(10, 10, 10, 10)
         props_main_layout.setSpacing(8)
@@ -1503,7 +1507,7 @@ class OCRApp(QMainWindow):
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("Target:"))
         self.lbl_target = QLabel("Select an item above")
-        self.lbl_target.setStyleSheet("color: #00d2ff; font-weight: bold; border: none;")
+        self.lbl_target.setStyleSheet("color: #5b9df9; font-weight: bold; border: none;")
         header_layout.addWidget(self.lbl_target)
         header_layout.addStretch()
         
@@ -1539,7 +1543,7 @@ class OCRApp(QMainWindow):
             sl.setTickPosition(QSlider.TickPosition.TicksBelow)
             sl.setTickInterval(1)
             sl.valueChanged.connect(self.sync_properties)
-            sl.setStyleSheet("QSlider::handle:horizontal { background: #888; width: 12px; border-radius: 6px; }")
+            sl.setStyleSheet("QSlider::groove:horizontal { background: #2c2f36; height: 4px; border-radius: 2px; } QSlider::handle:horizontal { background: #5b9df9; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }")
 
         self.sl_thresh.valueChanged.connect(lambda v: self.lbl_thresh_val.setText(str(v)))
         self.sl_thick.valueChanged.connect(lambda v: self.lbl_thick_val.setText(str(v)))
@@ -1561,7 +1565,7 @@ class OCRApp(QMainWindow):
 
         self.lbl_crop_preview = QLabel()
         self.lbl_crop_preview.setFixedSize(360, 60) 
-        self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #555;")
+        self.lbl_crop_preview.setStyleSheet("background-color: #000; border: 1px solid #2c2f36; border-radius: 4px;")
         self.lbl_crop_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         preview_layout = QHBoxLayout()
@@ -1583,7 +1587,7 @@ class OCRApp(QMainWindow):
         output_layout.setContentsMargins(8, 8, 8, 8)
         
         self.meta_card = QFrame()
-        self.meta_card.setStyleSheet("background-color: #222; border-radius: 4px; border: 1px solid #444; padding: 4px;")
+        self.meta_card.setStyleSheet("background-color: #1b1c20; border-radius: 8px; border: 1px solid #2c2f36; padding: 6px;")
         meta_layout = QHBoxLayout(self.meta_card)
         
         self.lbl_meta_frames = QLabel("Frames: 0")
@@ -1591,7 +1595,7 @@ class OCRApp(QMainWindow):
         self.lbl_meta_areas = QLabel("Scanned: 0")
         
         for lbl in[self.lbl_meta_frames, self.lbl_meta_ping, self.lbl_meta_areas]:
-            lbl.setStyleSheet("color: #aaa; font-weight: bold; font-size: 14px; border: none;")
+            lbl.setStyleSheet("color: #9aa0ab; font-weight: bold; font-size: 14px; border: none;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             meta_layout.addWidget(lbl)
 
@@ -1600,7 +1604,7 @@ class OCRApp(QMainWindow):
 
         self.ocr_output = QTextEdit()
         self.ocr_output.setReadOnly(True)
-        self.ocr_output.setStyleSheet("background-color: #0d0d0d; color: #00ff41; font-family: Consolas; font-size: 15px; border: 1px solid #333;")
+        self.ocr_output.setStyleSheet("background-color: #0b0c0e; color: #3ee089; font-family: Consolas; font-size: 15px; border: 1px solid #2c2f36; border-radius: 6px;")
         output_layout.addWidget(self.ocr_output)
 
         self.tabs.addTab(tab_config, "Configuration")
@@ -1611,7 +1615,7 @@ class OCRApp(QMainWindow):
         self.btn_ocr = QPushButton("START OCR DETECTION")
         self.btn_ocr.setCheckable(True)
         self.btn_ocr.setFixedHeight(50)
-        self.btn_ocr.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; font-size: 15px; border: none; border-radius: 4px;")
+        self.btn_ocr.setStyleSheet("background-color: #4a86e0; color: white; font-weight: bold; font-size: 15px; border: none; border-radius: 8px;")
         self.btn_ocr.clicked.connect(self.toggle_ocr_logic)
         left_master_layout.addWidget(self.btn_ocr)
 
@@ -1619,7 +1623,7 @@ class OCRApp(QMainWindow):
         # --- RIGHT PANEL ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll_area.setStyleSheet("background-color: #000; border: none;")
+        self.scroll_area.setStyleSheet("background-color: #0c0d0f; border: none;")
         
         self.preview_overlay = ROIOverlayWidget(self.scroll_area)
         self.scroll_area.setWidget(self.preview_overlay)
@@ -1658,11 +1662,11 @@ class OCRApp(QMainWindow):
         try:
             with open(default_path, 'w') as f:
                 json.dump(self.preview_overlay.rois, f, indent=4)
-            self.btn_save_def.setStyleSheet("background-color: #2ecc71; color: white;")
+            self.btn_save_def.setStyleSheet("background-color: #3ecf8e; color: #0c0d0f; font-weight: bold;")
             self.btn_save_def.setText("Saved!")
             QApplication.processEvents()
             time.sleep(0.5)
-            self.btn_save_def.setStyleSheet("background-color: #383838; color: white;")
+            self.btn_save_def.setStyleSheet("background-color: #2a2c32; color: white;")
             self.btn_save_def.setText("Set as Default")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to set default: {e}")
@@ -2015,7 +2019,7 @@ class OCRApp(QMainWindow):
         state = self.btn_ocr.isChecked()
         self.engine.ocr_enabled = state
         self.btn_ocr.setText("STOP OCR DETECTION" if state else "START OCR DETECTION")
-        self.btn_ocr.setStyleSheet(f"background-color: {'#c0392b' if state else '#2980b9'}; color: white; font-weight: bold; font-size: 15px; border: none; border-radius: 4px;")
+        self.btn_ocr.setStyleSheet(f"background-color: {'#ef5a52' if state else '#4a86e0'}; color: white; font-weight: bold; font-size: 15px; border: none; border-radius: 8px;")
         
         if state:
             # Reset validator state so previous game values don't block new reads
