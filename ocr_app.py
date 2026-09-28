@@ -806,7 +806,7 @@ class CaptureEngine(QThread):
 
         # KDA text is tiny, so enlarge it before OCR (Tesseract reads small text badly).
         scale = 1
-        if roi_type == 'KDA (K/D/A)':
+        if roi_type in ('KDA (K/D/A)', 'Gold Amount (K/M)'):
             scale = 4
             gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
 
@@ -825,8 +825,8 @@ class CaptureEngine(QThread):
             else:
                 processed = cv2.dilate(processed, kernel, iterations=1)
 
-        if roi_type == 'KDA (K/D/A)':
-            # Make the text black on white (the minority colour is the text) ...
+        if roi_type in ('KDA (K/D/A)', 'Gold Amount (K/M)'):
+            # Make the text black on white(the minority colour is the text) ...
             if cv2.countNonZero(processed) < processed.size / 2:
                 processed = cv2.bitwise_not(processed)
             # ... and add a white margin, which Tesseract needs for single-line reads.
@@ -845,7 +845,7 @@ class CaptureEngine(QThread):
         elif roi['type'] == 'KDA (K/D/A)':
             config = "-c tessedit_char_whitelist=0123456789/ --psm 7"
         elif roi['type'] == 'Gold Amount (K/M)':
-            config = "-c tessedit_char_whitelist=0123456789kKmM --psm 7"
+            config = "-c tessedit_char_whitelist=0123456789.kK --psm 7"
 
         data = pytesseract.image_to_data(
             processed_img, config=config,
