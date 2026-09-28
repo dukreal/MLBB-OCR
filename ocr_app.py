@@ -212,37 +212,59 @@ class OCRValidator:
     # ------------------------------------------------------------------
     # KDA validation (shape check + slash-repair + never-decreases)
     # ------------------------------------------------------------------
-    def _parse_kda_shape(self, raw: str):
+    def _kda_candidates(self, raw: str) -> list:
         """
-        Turn an OCR string into a (kills, deaths, assists) triple, or None
-        if it can't be made to fit that shape.
+        Return every plausible (kills, deaths, assists) reading of raw.
 
-        Handles the common failure where the SECOND slash is missed and two
-        numbers run together, e.g. "6/519" (meant "6/5/19"). We try every
-        way of splitting the merged digits and keep the first split where
-        both halves look like plausible KDA numbers.
+        A clean "n/n/n" read returns exactly one candidate. A read with only
+        one slash means the second slash was lost — this can happen two
+        ways, and we can't tell which from the text alone, so we try both:
+          A) the slash vanished and two numbers ran together, e.g.
+             "7/714" -> deaths=7, assists=14
+          B) the slash was misread AS the digit '1' (a thin '/' and a thin
+             '1' look similar), e.g. "6/519" -> deaths=5, assists=9
+        validate_kda() below picks between them using the field's history.
         """
         raw = raw.strip()
 
         m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{1,2})", raw)
         if m:
-            return tuple(int(g) for g in m.groups())
+            return [tuple(int(g) for g in m.groups())]
 
-        # Exactly one slash found -> the second slash was likely lost.
         m = re.fullmatch(r"(\d{1,2})/(\d{2,4})", raw)
-        if m:
-            kills, blob = m.group(1), m.group(2)
-            for i in range(1, len(blob)):
-                d_str, a_str = blob[:i], blob[i:]
-                if d_str.startswith("0") and d_str != "0":
-                    continue
-                if a_str.startswith("0") and a_str != "0":
-                    continue
-                deaths, assists = int(d_str), int(a_str)
-                if 0 <= deaths <= 30 and 0 <= assists <= 30:
-                    return (int(kills), deaths, assists)
+        if not m:
+            return []
+        kills, blob = int(m.group(1)), m.group(2)
 
-        return None
+        candidates = set()
+
+        # Strategy A — split the merged digits in two.
+        for i in range(1, len(blob)):
+            d_str, a_str = blob[:i], blob[i:]
+            if d_str.startswith("0") and d_str != "0":
+                continue
+            if a_str.startswith("0") and a_str != "0":
+                continue
+            deaths, assists = int(d_str), int(a_str)
+            if 0 <= deaths <= 30 and 0 <= assists <= 30:
+                candidates.add((kills, deaths, assists))
+
+        # Strategy B — a '1' inside the blob is the missed slash, not a digit.
+        for j, ch in enumerate(blob):
+            if ch != "1":
+                continue
+            d_str, a_str = blob[:j], blob[j + 1:]
+            if not d_str or not a_str:
+                continue
+            if d_str.startswith("0") and d_str != "0":
+                continue
+            if a_str.startswith("0") and a_str != "0":
+                continue
+            deaths, assists = int(d_str), int(a_str)
+            if 0 <= deaths <= 30 and 0 <= assists <= 30:
+                candidates.add((kills, deaths, assists))
+
+        return list(candidates)
 
     def validate_kda(self, field_name: str, new_raw: str, current_display: str) -> str:
         """
@@ -251,14 +273,28 @@ class OCRValidator:
         lower reading repeats CONFIRM_NEEDED times in a row (handles a
         genuine baseline correction, same idea as the numeric fields above).
         """
-        triple = self._parse_kda_shape(new_raw)
-        if triple is None:
+        candidates = self._kda_candidates(new_raw)
+        if not candidates:
             print(f"[Validator] [{field_name}] KDA BAD SHAPE '{new_raw}' — keeping '{current_display}'")
             self._kda_pending.pop(field_name, None)
             self._kda_pending_count.pop(field_name, None)
             return current_display
 
         last = self._last_kda.get(field_name)
+        if len(candidates) == 1:
+            triple = candidates[0]
+        elif last is not None:
+            # Prefer a candidate where nothing goes backward from the last
+            # accepted read — that's the strongest signal we have to pick
+            # the right split. If none qualify, fall back to the smallest guess.
+            consistent = [c for c in candidates if all(v >= lv for v, lv in zip(c, last))]
+            triple = min(consistent, key=sum) if consistent else min(candidates, key=sum)
+        else:
+            # No history yet — guess low. An undercount corrects itself on the
+            # very next higher read (increases need no confirmation); an
+            # overcount would need 3 repeated readings to walk back.
+            triple = min(candidates, key=sum)
+
         if last is not None and any(new_v < last_v for new_v, last_v in zip(triple, last)):
             prev_pending = self._kda_pending.get(field_name)
             if prev_pending == triple:
