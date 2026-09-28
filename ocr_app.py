@@ -801,8 +801,15 @@ class CaptureEngine(QThread):
 
         return img
 
-    def preprocess_image(self, crop, threshold_val, thickness_val):
+    def preprocess_image(self, crop, threshold_val, thickness_val, roi_type=None):
         gray = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
+
+        # KDA text is tiny, so enlarge it before OCR (Tesseract reads small text badly).
+        scale = 1
+        if roi_type == 'KDA (K/D/A)':
+            scale = 4
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+
         if threshold_val <= 1:
             _, processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         else:
@@ -811,12 +818,21 @@ class CaptureEngine(QThread):
             
         thick_calc = thickness_val - 5
         if thick_calc != 0:
-            k_size = abs(thick_calc) + 1
+            k_size = (abs(thick_calc) + 1) * scale    # keep the slider's meaning after enlarging
             kernel = np.ones((k_size, k_size), np.uint8)
             if thick_calc > 0:
                 processed = cv2.erode(processed, kernel, iterations=1)
             else:
                 processed = cv2.dilate(processed, kernel, iterations=1)
+
+        if roi_type == 'KDA (K/D/A)':
+            # Make the text black on white (the minority colour is the text) ...
+            if cv2.countNonZero(processed) < processed.size / 2:
+                processed = cv2.bitwise_not(processed)
+            # ... and add a white margin, which Tesseract needs for single-line reads.
+            pad = 8 * scale
+            processed = cv2.copyMakeBorder(processed, pad, pad, pad, pad,
+                                           cv2.BORDER_CONSTANT, value=255)
         return processed
 
     def _process_single_roi(self, roi, processed_img):
@@ -1088,7 +1104,7 @@ class CaptureEngine(QThread):
                         # Ensure crop is within frame boundaries
                         crop = frame[max(0, y):min(fh, y+h), max(0, x):min(fw, x+w)]
                         if crop.size > 0:
-                            processed = self.preprocess_image(crop, roi['threshold'], roi['thickness'])
+                            processed = self.preprocess_image(crop, roi['threshold'], roi['thickness'], roi['type'])
                             previews[roi['id']] = processed
                     
                     self.previews_signal.emit(previews)
@@ -1433,6 +1449,10 @@ class OCRApp(QMainWindow):
         preview_layout.addWidget(self.lbl_crop_preview)
         preview_layout.addStretch()
         props_main_layout.addLayout(preview_layout)
+
+        self.btn_copy_crop = QPushButton("Copy Image")
+        self.btn_copy_crop.clicked.connect(self.copy_crop_preview)
+        props_main_layout.addWidget(self.btn_copy_crop)
 
         config_layout.addWidget(self.props_frame)
         config_layout.addStretch() 
@@ -1894,10 +1914,28 @@ class OCRApp(QMainWindow):
         q_img = QImage(frame.data, w, h, w * c, QImage.Format.Format_ARGB32)
         self.preview_overlay.set_frame(QPixmap.fromImage(q_img))
 
+    def copy_crop_preview(self):
+        img = getattr(self, 'last_crop_image', None)
+        if img is None or img.size == 0:
+            self.btn_copy_crop.setText("Select a field first")
+        else:
+            img = np.ascontiguousarray(img)
+            # Enlarge small crops (sharp pixels) so the pasted picture is easy to see.
+            grow = max(1, 400 // max(1, img.shape[1]))
+            if grow > 1:
+                img = cv2.resize(img, None, fx=grow, fy=grow, interpolation=cv2.INTER_NEAREST)
+            h, w = img.shape
+            qimg = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
+            QApplication.clipboard().setImage(qimg)
+            self.btn_copy_crop.setText("Copied!")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1200, lambda: self.btn_copy_crop.setText("Copy Image"))
+
     def update_roi_preview(self, previews_dict):
         roi_id = self.preview_overlay.selected_id
         if roi_id is not None and roi_id in previews_dict:
             processed = previews_dict[roi_id]
+            self.last_crop_image = processed      # full-size image, used by the Copy Image button
             h, w = processed.shape
             q_img = QImage(processed.data, w, h, w, QImage.Format.Format_Grayscale8)
             pixmap = QPixmap.fromImage(q_img)
