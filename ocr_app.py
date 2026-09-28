@@ -983,7 +983,10 @@ class CaptureEngine(QThread):
                     confidences.append(conf)
 
         text = " ".join(words)
-        min_conf = min(confidences) if confidences else 0
+        # -1 means Tesseract found the text but couldn't attach a real score
+        # to it — different from an actual low score, so we treat it
+        # differently below instead of discarding it outright.
+        min_conf = min(confidences) if confidences else -1
 
         return roi, text, min_conf
 
@@ -1010,7 +1013,7 @@ class CaptureEngine(QThread):
                         # The "Conf. Th" slider is stored 1-10 in the UI;
                         # scale it to a rough 0-100 confidence floor.
                         conf_floor = roi.get('confidence', 1) * 10
-                        if min_conf < conf_floor:
+                        if min_conf != -1 and min_conf < conf_floor:
                             print(f"[OCR] [{roi.get('name')}] LOW CONFIDENCE {min_conf} < {conf_floor} — discarded '{text}'")
                             continue
                         safe_name = roi['name'] if roi['name'] else f"Area_{roi['id']}"
