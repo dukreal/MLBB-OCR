@@ -1501,7 +1501,8 @@ class OCRApp(QMainWindow):
         config_layout.addLayout(scene_btn_layout)
 
         self.props_frame = QFrame()
-        self.props_frame.setStyleSheet("QFrame { background-color: #22242a; border-radius: 8px; border: 1px solid #2c2f36; margin-top: 10px; }")
+        self.props_frame.setObjectName("propsFrame")
+        self.props_frame.setStyleSheet("QFrame#propsFrame { background-color: #22242a; border-radius: 8px; border: 1px solid #2c2f36; margin-top: 10px; }")
         props_main_layout = QVBoxLayout(self.props_frame)
         props_main_layout.setContentsMargins(10, 10, 10, 10)
         props_main_layout.setSpacing(8)
