@@ -1,4 +1,5 @@
 import os
+import re
 os.environ["OMP_THREAD_LIMIT"] = "1"
 
 import sys
@@ -162,6 +163,12 @@ class OCRValidator:
         self._correction_value: dict[str, float] = {}
         self._correction_count: dict[str, int]   = {}
 
+        # KDA-specific state: last accepted (kills, deaths, assists) triple,
+        # and pending-decrease tracking (mirrors the numeric pending logic above).
+        self._last_kda:         dict[str, tuple[int, int, int]] = {}
+        self._kda_pending:      dict[str, tuple[int, int, int]] = {}
+        self._kda_pending_count: dict[str, int]                 = {}
+
     # Frames of consistent lower reading needed to force-correct a bad baseline
     CORRECTION_OVERRIDE = 20
 
@@ -201,6 +208,80 @@ class OCRValidator:
         self._pending_count.pop(field_name, None)
         self._correction_value.pop(field_name, None)
         self._correction_count.pop(field_name, None)
+
+    # ------------------------------------------------------------------
+    # KDA validation (shape check + slash-repair + never-decreases)
+    # ------------------------------------------------------------------
+    def _parse_kda_shape(self, raw: str):
+        """
+        Turn an OCR string into a (kills, deaths, assists) triple, or None
+        if it can't be made to fit that shape.
+
+        Handles the common failure where the SECOND slash is missed and two
+        numbers run together, e.g. "6/519" (meant "6/5/19"). We try every
+        way of splitting the merged digits and keep the first split where
+        both halves look like plausible KDA numbers.
+        """
+        raw = raw.strip()
+
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{1,2})", raw)
+        if m:
+            return tuple(int(g) for g in m.groups())
+
+        # Exactly one slash found -> the second slash was likely lost.
+        m = re.fullmatch(r"(\d{1,2})/(\d{2,4})", raw)
+        if m:
+            kills, blob = m.group(1), m.group(2)
+            for i in range(1, len(blob)):
+                d_str, a_str = blob[:i], blob[i:]
+                if d_str.startswith("0") and d_str != "0":
+                    continue
+                if a_str.startswith("0") and a_str != "0":
+                    continue
+                deaths, assists = int(d_str), int(a_str)
+                if 0 <= deaths <= 30 and 0 <= assists <= 30:
+                    return (int(kills), deaths, assists)
+
+        return None
+
+    def validate_kda(self, field_name: str, new_raw: str, current_display: str) -> str:
+        """
+        Validate a KDA read: must fit (or be repairable to) kills/deaths/assists,
+        and none of the three numbers may decrease during a match unless a
+        lower reading repeats CONFIRM_NEEDED times in a row (handles a
+        genuine baseline correction, same idea as the numeric fields above).
+        """
+        triple = self._parse_kda_shape(new_raw)
+        if triple is None:
+            print(f"[Validator] [{field_name}] KDA BAD SHAPE '{new_raw}' — keeping '{current_display}'")
+            self._kda_pending.pop(field_name, None)
+            self._kda_pending_count.pop(field_name, None)
+            return current_display
+
+        last = self._last_kda.get(field_name)
+        if last is not None and any(new_v < last_v for new_v, last_v in zip(triple, last)):
+            prev_pending = self._kda_pending.get(field_name)
+            if prev_pending == triple:
+                count = self._kda_pending_count.get(field_name, 1) + 1
+            else:
+                count = 1
+            self._kda_pending[field_name] = triple
+            self._kda_pending_count[field_name] = count
+
+            if count >= self.CONFIRM_NEEDED:
+                print(f"[Validator] [{field_name}] CONFIRMED KDA decrease {last} -> {triple} after {count} readings")
+                self._last_kda[field_name] = triple
+                self._kda_pending.pop(field_name, None)
+                self._kda_pending_count.pop(field_name, None)
+                return "/".join(str(v) for v in triple)
+
+            print(f"[Validator] [{field_name}] BLOCKED KDA decrease {last} -> {triple} ({count}/{self.CONFIRM_NEEDED})")
+            return current_display
+
+        self._last_kda[field_name] = triple
+        self._kda_pending.pop(field_name, None)
+        self._kda_pending_count.pop(field_name, None)
+        return "/".join(str(v) for v in triple)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -1962,6 +2043,7 @@ class OCRApp(QMainWindow):
 
         self.internal_update = True
         display_dict = {}
+        roi_types = {roi['id']: roi.get('type') for roi in self.preview_overlay.rois}
         
         for i in range(self.roi_table.rowCount()):
             field_name = self.roi_table.item(i, 1).text()
@@ -1973,7 +2055,10 @@ class OCRApp(QMainWindow):
             if safe_name in data_dict:
                 raw_val = data_dict[safe_name]
                 # --- VALIDATION: reject bad OCR reads before storing ---
-                validated_val = self.ocr_validator.validate(safe_name, raw_val, current_value)
+                if roi_types.get(roi_id) == 'KDA (K/D/A)':
+                    validated_val = self.ocr_validator.validate_kda(safe_name, raw_val, current_value)
+                else:
+                    validated_val = self.ocr_validator.validate(safe_name, raw_val, current_value)
                 self.roi_table.item(i, 2).setText(validated_val)
                 display_dict[safe_name] = validated_val
             else:
