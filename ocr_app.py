@@ -2025,13 +2025,13 @@ class OCRApp(QMainWindow):
         self.btn_ocr.setStyleSheet(f"background-color: {'#ef5a52' if state else '#4a86e0'}; color: white; font-weight: bold; font-size: 15px; border: none; border-radius: 8px;")
         
         if state:
-            # Reset validator state so previous game values don't block new reads
-            self.ocr_validator.reset()
-            # Also clear the displayed values in the table back to 0
-            for i in range(self.roi_table.rowCount()):
-                val_item = self.roi_table.item(i, 2)
-                if val_item:
-                    val_item.setText("0")
+            # NOTE: we intentionally do NOT clear the displayed values here
+            # anymore. Start is used both to resume mid-match and to begin a
+            # fresh match, and there's no way to tell which — forcibly
+            # zeroing every field on every Start caused KDA/gold values to
+            # flash to 0 when simply pausing/resuming OCR during a live game.
+            # Existing values now just stay on screen until OCR reconfirms
+            # them, which is what we want when resuming.
             self.tabs.setCurrentIndex(1)
 
     def update_preview(self, frame):
