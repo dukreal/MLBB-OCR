@@ -1528,6 +1528,10 @@ class OCRApp(QMainWindow):
         config_layout.addWidget(self.btn_add_preset)
 
         # --- TABLE WITH 3 COLUMNS AND SIDE BUTTONS ---
+        lbl_fields_section = QLabel("FIELDS")
+        lbl_fields_section.setStyleSheet("color: #6b7078; font-weight: bold; font-size: 11px; letter-spacing: 1px; border: none;")
+        config_layout.addWidget(lbl_fields_section)
+
         table_layout = QHBoxLayout()
         table_layout.setSpacing(5) 
         
@@ -1537,15 +1541,21 @@ class OCRApp(QMainWindow):
         self.roi_table.setColumnWidth(0, 25)
         self.roi_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.roi_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.roi_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.roi_table.verticalHeader().setVisible(False)
         self.roi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.roi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.roi_table.setFixedHeight(160) 
         self.roi_table.setStyleSheet("""
             QTableWidget { background-color: #1b1c20; color: #eceef0; border: 1px solid #2c2f36; border-radius: 6px; gridline-color: #2c2f36; font-size: 13px; }
-            QHeaderView::section { background-color: #26282e; color: #d6d8db; border: none; border-bottom: 1px solid #2c2f36; padding: 6px; font-weight: bold; }
-            QTableWidget::item { padding: 3px; }
+            QHeaderView::section { background-color: #26282e; color: #d6d8db; border: none; border-bottom: 1px solid #2c2f36; padding: 6px 8px; font-weight: bold; }
+            QTableWidget::item { padding: 3px 8px; }
             QTableWidget::item:selected { background-color: #3a5f96; }
+            QScrollBar:vertical { background: #1b1c20; width: 10px; margin: 0px; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #383b42; border-radius: 5px; min-height: 24px; }
+            QScrollBar::handle:vertical:hover { background: #46494f; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: none; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
         """)
         self.roi_table.itemSelectionChanged.connect(self.on_table_selection)
         self.roi_table.itemChanged.connect(self.on_table_item_changed)
@@ -1578,6 +1588,10 @@ class OCRApp(QMainWindow):
         scene_btn_layout.addWidget(self.btn_remove_scene)
         config_layout.addLayout(scene_btn_layout)
 
+        lbl_props_section = QLabel("FIELD PROPERTIES")
+        lbl_props_section.setStyleSheet("color: #6b7078; font-weight: bold; font-size: 11px; letter-spacing: 1px; border: none; margin-top: 4px;")
+        config_layout.addWidget(lbl_props_section)
+
         self.props_frame = QFrame()
         self.props_frame.setObjectName("propsFrame")
         self.props_frame.setStyleSheet("QFrame#propsFrame { background-color: #22242a; border-radius: 8px; border: 1px solid #2c2f36; margin-top: 10px; }")
@@ -1597,6 +1611,11 @@ class OCRApp(QMainWindow):
         header_layout.addWidget(self.btn_defaults)
         
         props_main_layout.addLayout(header_layout)
+
+        props_divider = QFrame()
+        props_divider.setFixedHeight(1)
+        props_divider.setStyleSheet("background-color: #2c2f36; border: none;")
+        props_main_layout.addWidget(props_divider)
 
         grid = QGridLayout()
         grid.setSpacing(10)
@@ -1652,16 +1671,37 @@ class OCRApp(QMainWindow):
             edit.setValidator(QIntValidator(0, 100_000, self))
             edit.editingFinished.connect(self.apply_geometry_edit)
 
-        grid.addWidget(QLabel("X"), 4, 0)
-        grid.addWidget(self.edit_x, 4, 1, 1, 2)
-        grid.addWidget(QLabel("Y"), 5, 0)
-        grid.addWidget(self.edit_y, 5, 1, 1, 2)
-        grid.addWidget(QLabel("Width"), 6, 0)
-        grid.addWidget(self.edit_w, 6, 1, 1, 2)
-        grid.addWidget(QLabel("Height"), 7, 0)
-        grid.addWidget(self.edit_h, 7, 1, 1, 2)
-
         props_main_layout.addLayout(grid)
+
+        geo_divider = QFrame()
+        geo_divider.setFixedHeight(1)
+        geo_divider.setStyleSheet("background-color: #2c2f36; border: none;")
+        props_main_layout.addWidget(geo_divider)
+
+        lbl_geo_section = QLabel("POSITION & SIZE (px)")
+        lbl_geo_section.setStyleSheet("color: #6b7078; font-weight: bold; font-size: 11px; letter-spacing: 1px; border: none;")
+        props_main_layout.addWidget(lbl_geo_section)
+
+        def _labeled_geo_box(label_text, edit_widget):
+            box = QVBoxLayout()
+            box.setSpacing(3)
+            cap = QLabel(label_text)
+            cap.setStyleSheet("color: #9aa0ab; font-size: 12px; border: none;")
+            box.addWidget(cap)
+            box.addWidget(edit_widget)
+            return box
+
+        geo_row1 = QHBoxLayout()
+        geo_row1.setSpacing(10)
+        geo_row1.addLayout(_labeled_geo_box("X", self.edit_x))
+        geo_row1.addLayout(_labeled_geo_box("Y", self.edit_y))
+        props_main_layout.addLayout(geo_row1)
+
+        geo_row2 = QHBoxLayout()
+        geo_row2.setSpacing(10)
+        geo_row2.addLayout(_labeled_geo_box("Width", self.edit_w))
+        geo_row2.addLayout(_labeled_geo_box("Height", self.edit_h))
+        props_main_layout.addLayout(geo_row2)
 
         self.lbl_crop_preview = QLabel()
         self.lbl_crop_preview.setFixedSize(360, 60) 
