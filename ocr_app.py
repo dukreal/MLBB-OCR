@@ -144,6 +144,12 @@ class OCRValidator:
         # Tower kills — max 9 in MLBB, only go up, confirm_first prevents misread locking baseline
         "tower-blue": {"min_val": 0, "max_val": 9, "max_jump": 9, "max_drop": 0, "confirm_first": True, "confirm_needed": 8},
         "tower-red":  {"min_val": 0, "max_val": 9, "max_jump": 9, "max_drop": 0, "confirm_first": True, "confirm_needed": 8},
+
+        # Team score (total team kills) — a teamfight can add several kills
+        # in one OCR cycle across 5 players, so max_jump is a bit looser
+        # than a single player's kill count.
+        "score-blue": {"min_val": 0, "max_val": 60, "max_jump": 10, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
+        "score-red":  {"min_val": 0, "max_val": 60, "max_jump": 10, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
     }
 
     def __init__(self):
@@ -629,6 +635,62 @@ class ROIOverlayWidget(QWidget):
         self.rois_changed.emit(self.rois)
         self.roi_selected.emit(self.selected_id)
         return new_roi['id']
+
+    # Every field the "Add MLBB Preset Fields" button creates in one go:
+    # (name, Format type). Positions are assigned in a grid below — they're
+    # meant to be dragged onto the real HUD afterward, not final placements.
+    MLBB_PRESET_FIELDS = (
+        [(f"kda-blue-p{i}", "KDA (K/D/A)") for i in range(1, 6)] +
+        [(f"kda-red-p{i}",  "KDA (K/D/A)") for i in range(1, 6)] +
+        [(f"gold-blue-p{i}", "Gold Amount (K/M)") for i in range(1, 6)] +
+        [(f"gold-red-p{i}",  "Gold Amount (K/M)") for i in range(1, 6)] +
+        [("timer", "Time Format")] +
+        [("tower-blue", "Numbers Only"), ("tower-red", "Numbers Only")] +
+        [("lord-blue", "Numbers Only"),  ("lord-red", "Numbers Only")] +
+        [("score-blue", "Numbers Only"), ("score-red", "Numbers Only")]
+    )
+
+    def add_preset_fields(self):
+        """
+        Add every standard MLBB field (KDA, gold, timer, towers, lord, team
+        score) in one go, pre-named and pre-typed so validation attaches
+        correctly. Skips any name that already exists so this is safe to
+        click more than once. Returns (added_count, skipped_count).
+        """
+        existing_names = {r['name'] for r in self.rois}
+        cols, box_w, box_h = 9, 0.05, 0.035
+        x_start, y_start = 0.02, 0.02
+        x_step, y_step = 0.06, 0.055
+
+        added, skipped, first_new_id = 0, 0, None
+        for i, (name, field_type) in enumerate(self.MLBB_PRESET_FIELDS):
+            if name in existing_names:
+                skipped += 1
+                continue
+            col, row = i % cols, i // cols
+            x = min(x_start + col * x_step, 1.0 - box_w)
+            y = min(y_start + row * y_step, 1.0 - box_h)
+            self.rois.append({
+                'id': self.area_counter,
+                'name': name,
+                'rect': [x, y, box_w, box_h],
+                'type': field_type,
+                'threshold': 1,
+                'thickness': 5,
+                'confidence': 6,
+                'is_on_scene': True
+            })
+            if first_new_id is None:
+                first_new_id = self.area_counter
+            self.area_counter += 1
+            added += 1
+
+        if first_new_id is not None:
+            self.selected_id = first_new_id
+            self.update()
+            self.rois_changed.emit(self.rois)
+            self.roi_selected.emit(self.selected_id)
+        return added, skipped
 
     def remove_selected_field(self):
         if self.selected_id is not None:
@@ -1449,6 +1511,10 @@ class OCRApp(QMainWindow):
         profile_layout.addWidget(self.btn_save_def)
         config_layout.addLayout(profile_layout)
 
+        self.btn_add_preset = QPushButton("Add MLBB Preset Fields")
+        self.btn_add_preset.clicked.connect(self.add_preset_fields_clicked)
+        config_layout.addWidget(self.btn_add_preset)
+
         # --- TABLE WITH 3 COLUMNS AND SIDE BUTTONS ---
         table_layout = QHBoxLayout()
         table_layout.setSpacing(5) 
@@ -2040,6 +2106,28 @@ class OCRApp(QMainWindow):
         # Format_ARGB32 = BGRA on little-endian x86/x64 — correct colors without extra swap.
         q_img = QImage(frame.data, w, h, w * c, QImage.Format.Format_ARGB32)
         self.preview_overlay.set_frame(QPixmap.fromImage(q_img))
+
+    def add_preset_fields_clicked(self):
+        added, skipped = self.preview_overlay.add_preset_fields()
+        if added == 0:
+            self.btn_add_preset.setText("All preset fields already added")
+        elif skipped == 0:
+            self.btn_add_preset.setText(f"Added {added} fields — drag them into place")
+        else:
+            self.btn_add_preset.setText(f"Added {added}, skipped {skipped} existing")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(2500, lambda: self.btn_add_preset.setText("Add MLBB Preset Fields"))
+
+    def add_preset_fields_clicked(self):
+        added, skipped = self.preview_overlay.add_preset_fields()
+        if added == 0:
+            self.btn_add_preset.setText("All preset fields already added")
+        elif skipped == 0:
+            self.btn_add_preset.setText(f"Added {added} fields — drag them into place")
+        else:
+            self.btn_add_preset.setText(f"Added {added}, skipped {skipped} existing")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(2500, lambda: self.btn_add_preset.setText("Add MLBB Preset Fields"))
 
     def copy_crop_preview(self):
         img = getattr(self, 'last_crop_image', None)
