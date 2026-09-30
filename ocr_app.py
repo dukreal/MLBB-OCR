@@ -152,6 +152,18 @@ class OCRValidator:
         "score-red":  {"min_val": 0, "max_val": 60, "max_jump": 10, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
     }
 
+    # Same limits as blue-gold/red-gold above, but applied by the ROI's
+    # Format type ("Gold Amount (K/M)") instead of by name — so it works
+    # regardless of what you actually name each player's gold field
+    # (name-substring matching can't cover every naming convention).
+    GOLD_FIELD_RULE = {
+        "min_val": 0, "max_val": 999_999,
+        "max_jump": 2_500, "max_drop": 400,
+        "min_floor_pct": 0.1,
+        "confirm_needed": 5,
+        "confirm_drop": True,
+    }
+
     def __init__(self):
         # Last accepted numeric value per field
         self._last_values:   dict[str, float] = {}
@@ -328,7 +340,7 @@ class OCRValidator:
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
-    def validate(self, field_name: str, new_raw: str, current_display: str) -> str:
+    def validate(self, field_name: str, new_raw: str, current_display: str, rule_override: dict | None = None) -> str:
         """
         Validate new_raw (freshly OCR-read) for field_name.
 
@@ -339,7 +351,7 @@ class OCRValidator:
             last valid raw   - value failed the jump check but is now
                                confirmed after CONFIRM_NEEDED repeats
         """
-        rule = self._get_rule(field_name)
+        rule = rule_override if rule_override is not None else self._get_rule(field_name)
         if rule is None:
             return new_raw  # no rule — pass through
 
@@ -2189,8 +2201,13 @@ class OCRApp(QMainWindow):
             if safe_name in data_dict:
                 raw_val = data_dict[safe_name]
                 # --- VALIDATION: reject bad OCR reads before storing ---
-                if roi_types.get(roi_id) == 'KDA (K/D/A)':
+                field_type = roi_types.get(roi_id)
+                if field_type == 'KDA (K/D/A)':
                     validated_val = self.ocr_validator.validate_kda(safe_name, raw_val, current_value)
+                elif field_type == 'Gold Amount (K/M)':
+                    validated_val = self.ocr_validator.validate(
+                        safe_name, raw_val, current_value,
+                        rule_override=self.ocr_validator.GOLD_FIELD_RULE)
                 else:
                     validated_val = self.ocr_validator.validate(safe_name, raw_val, current_value)
                 self.roi_table.item(i, 2).setText(validated_val)
