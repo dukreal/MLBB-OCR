@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox,
                              QLineEdit)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon, QIntValidator
 
 # --- DPI Scaling Fixes ---
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
@@ -1642,6 +1642,25 @@ class OCRApp(QMainWindow):
         grid.addWidget(self.sl_conf, 3, 1)
         grid.addWidget(self.lbl_conf_val, 3, 2)
 
+        # Geometry (position/size within the actual captured frame, in
+        # pixels — not the on-screen widget, which changes with window size).
+        self.edit_x = QLineEdit()
+        self.edit_y = QLineEdit()
+        self.edit_w = QLineEdit()
+        self.edit_h = QLineEdit()
+        for edit in (self.edit_x, self.edit_y, self.edit_w, self.edit_h):
+            edit.setValidator(QIntValidator(0, 100_000, self))
+            edit.editingFinished.connect(self.apply_geometry_edit)
+
+        grid.addWidget(QLabel("X"), 4, 0)
+        grid.addWidget(self.edit_x, 4, 1, 1, 2)
+        grid.addWidget(QLabel("Y"), 5, 0)
+        grid.addWidget(self.edit_y, 5, 1, 1, 2)
+        grid.addWidget(QLabel("Width"), 6, 0)
+        grid.addWidget(self.edit_w, 6, 1, 1, 2)
+        grid.addWidget(QLabel("Height"), 7, 0)
+        grid.addWidget(self.edit_h, 7, 1, 1, 2)
+
         props_main_layout.addLayout(grid)
 
         self.lbl_crop_preview = QLabel()
@@ -1715,6 +1734,7 @@ class OCRApp(QMainWindow):
         self.btn_remove_scene.clicked.connect(self.preview_overlay.remove_from_scene)
         
         self.preview_overlay.rois_changed.connect(self.sync_table_to_rois)
+        self.preview_overlay.rois_changed.connect(self.sync_geometry_fields_from_selection)
         self.preview_overlay.roi_selected.connect(self.populate_properties_panel)
 
         layout.addWidget(left_container)
@@ -2081,6 +2101,67 @@ class OCRApp(QMainWindow):
                     self.roi_table.selectRow(i)
                     break
             self.internal_update = False
+
+            self.set_geometry_fields(roi)
+
+    def set_geometry_fields(self, roi):
+        """Show roi's position/size in pixels of the actual captured frame."""
+        fw = self.preview_overlay.current_pixmap.width()
+        fh = self.preview_overlay.current_pixmap.height()
+        if fw <= 0 or fh <= 0:
+            return
+        nx, ny, nw, nh = roi['rect']
+        for edit, value in (
+            (self.edit_x, round(nx * fw)), (self.edit_y, round(ny * fh)),
+            (self.edit_w, round(nw * fw)), (self.edit_h, round(nh * fh)),
+        ):
+            if not edit.hasFocus():          # don't yank the cursor while the user is typing
+                edit.blockSignals(True)
+                edit.setText(str(value))
+                edit.blockSignals(False)
+
+    def sync_geometry_fields_from_selection(self, _rois=None):
+        """Called on any ROI change (e.g. dragging) to keep the geometry
+        boxes live-updated for whichever field is currently selected."""
+        roi_id = self.preview_overlay.selected_id
+        if roi_id is None:
+            return
+        roi = next((r for r in self.preview_overlay.rois if r['id'] == roi_id), None)
+        if roi:
+            self.set_geometry_fields(roi)
+
+    def apply_geometry_edit(self):
+        """User edited X/Y/Width/Height directly — write it back to the ROI."""
+        roi_id = self.preview_overlay.selected_id
+        if roi_id is None:
+            return
+        fw = self.preview_overlay.current_pixmap.width()
+        fh = self.preview_overlay.current_pixmap.height()
+        if fw <= 0 or fh <= 0:
+            return
+
+        for roi in self.preview_overlay.rois:
+            if roi['id'] != roi_id:
+                continue
+            try:
+                px = int(self.edit_x.text()); py = int(self.edit_y.text())
+                pw = int(self.edit_w.text()); ph = int(self.edit_h.text())
+            except ValueError:
+                self.set_geometry_fields(roi)   # invalid text — revert to the real values
+                return
+
+            # Minimum 2% of the frame, same floor the drag-resize handle uses.
+            nw = max(0.02, min(pw / fw, 1.0))
+            nh = max(0.02, min(ph / fh, 1.0))
+            nx = max(0.0, min(px / fw, 1.0 - nw))
+            ny = max(0.0, min(py / fh, 1.0 - nh))
+            roi['rect'] = [nx, ny, nw, nh]
+            self.set_geometry_fields(roi)       # reflect any clamping back into the boxes
+            break
+
+        self.preview_overlay.update()
+        self.engine.update_rois(self.preview_overlay.rois)
+        self.preview_overlay.rois_changed.emit(self.preview_overlay.rois)
 
     def sync_properties(self):
         roi_id = self.preview_overlay.selected_id
