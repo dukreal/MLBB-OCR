@@ -1747,7 +1747,20 @@ class OCRApp(QMainWindow):
         self.ocr_output.setStyleSheet("background-color: #0b0c0e; color: #3ee089; font-family: Consolas; font-size: 15px; border: 1px solid #2c2f36; border-radius: 6px;")
         output_layout.addWidget(self.ocr_output)
 
-        self.tabs.addTab(tab_config, "Configuration")
+        config_scroll = QScrollArea()
+        config_scroll.setWidget(tab_config)
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        config_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        config_scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical { background: #1b1c20; width: 10px; margin: 0px; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #383b42; border-radius: 5px; min-height: 24px; }
+            QScrollBar::handle:vertical:hover { background: #46494f; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: none; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+        """)
+        self.tabs.addTab(config_scroll, "Configuration")
         self.tabs.addTab(tab_output, "Live Data")
         
         left_master_layout.addWidget(self.tabs)
