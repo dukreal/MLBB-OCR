@@ -1,5 +1,6 @@
 import os
 import re
+import copy
 os.environ["OMP_THREAD_LIMIT"] = "1"
 
 import sys
@@ -17,7 +18,7 @@ import threading
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
-                             QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, 
+                             QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, QSpinBox,
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox,
                              QLineEdit)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
@@ -583,8 +584,43 @@ class ROIOverlayWidget(QWidget):
         self.drag_state = None
         self.last_mouse_pos = None
         self.copied_roi = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self.UNDO_LIMIT = 50
+
+    def snapshot_before_change(self):
+        """Call this right before a field-affecting change (move, resize,
+        rename, add, delete, paste) so it can be undone with Ctrl+Z."""
+        self.undo_stack.append(copy.deepcopy(self.rois))
+        if len(self.undo_stack) > self.UNDO_LIMIT:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()   # a new change invalidates old redo history
+
+    def _restore_snapshot(self, snapshot):
+        self.rois = snapshot
+        existing_ids = {r['id'] for r in self.rois}
+        if self.selected_id not in existing_ids:
+            self.selected_id = None
+        self.update()
+        self.rois_changed.emit(self.rois)
+        self.roi_selected.emit(self.selected_id if self.selected_id is not None else -1)
+
+    def undo(self):
+        if not self.undo_stack:
+            return False
+        self.redo_stack.append(copy.deepcopy(self.rois))
+        self._restore_snapshot(self.undo_stack.pop())
+        return True
+
+    def redo(self):
+        if not self.redo_stack:
+            return False
+        self.undo_stack.append(copy.deepcopy(self.rois))
+        self._restore_snapshot(self.redo_stack.pop())
+        return True
 
     def add_field(self):
+        self.snapshot_before_change()
         self.rois.append({
             'id': self.area_counter,
             'name': f"Area {self.area_counter}", 
@@ -615,6 +651,7 @@ class ROIOverlayWidget(QWidget):
         """Paste the copied field, centered in the part of the canvas you can currently see."""
         if not self.copied_roi:
             return None
+        self.snapshot_before_change()
         src = self.copied_roi
 
         # The visible working area = the scroll area's viewport, mapped into this widget.
@@ -669,6 +706,7 @@ class ROIOverlayWidget(QWidget):
         correctly. Skips any name that already exists so this is safe to
         click more than once. Returns (added_count, skipped_count).
         """
+        self.snapshot_before_change()
         existing_names = {r['name'] for r in self.rois}
         cols, box_w, box_h = 9, 0.05, 0.035
         x_start, y_start = 0.02, 0.02
@@ -702,10 +740,13 @@ class ROIOverlayWidget(QWidget):
             self.update()
             self.rois_changed.emit(self.rois)
             self.roi_selected.emit(self.selected_id)
+        else:
+            self.undo_stack.pop()   # nothing was added — don't leave a no-op undo step
         return added, skipped
 
     def remove_selected_field(self):
         if self.selected_id is not None:
+            self.snapshot_before_change()
             self.rois = [r for r in self.rois if r['id'] != self.selected_id]
             self.selected_id = None
             self.update()
@@ -839,12 +880,14 @@ class ROIOverlayWidget(QWidget):
             full_box = QRect(int(rx), int(ry), int(rw), int(rh))
             
             if resize_handle.contains(mx, my):
+                self.snapshot_before_change()
                 self.selected_id = roi['id']
                 self.drag_state = 'resize'
                 self.last_mouse_pos = (mx, my)
                 clicked_roi = roi
                 break
             elif full_box.contains(mx, my):
+                self.snapshot_before_change()
                 self.selected_id = roi['id']
                 self.drag_state = 'move'
                 self.last_mouse_pos = (mx, my)
@@ -1324,6 +1367,19 @@ class CaptureEngine(QThread):
     def stop(self):
         self.running = False
         
+class SteppedSpinBox(QSpinBox):
+    """
+    A QSpinBox whose arrow buttons (and Up/Down keys) fire editingFinished
+    immediately, the same as pressing Enter after typing. This gives us one
+    clean "commit" signal for both input methods: typing fires it once when
+    you're done (Enter/click away), and each arrow click fires it once too
+    — instead of valueChanged, which fires on every keystroke while typing.
+    """
+    def stepBy(self, steps):
+        super().stepBy(steps)
+        self.editingFinished.emit()
+
+
 class ReorderableTable(QTableWidget):
     """Field table whose rows can be dragged up/down to change their order."""
     row_moved = pyqtSignal(int, int)   # (old_row, new_row)
@@ -1418,6 +1474,10 @@ class OCRApp(QMainWindow):
         self.shortcut_copy.activated.connect(self.shortcut_copy_field)
         self.shortcut_paste = QShortcut(QKeySequence("Ctrl+V"), self)
         self.shortcut_paste.activated.connect(self.shortcut_paste_field)
+        self.shortcut_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.shortcut_undo.activated.connect(self.shortcut_undo_field)
+        self.shortcut_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.shortcut_redo.activated.connect(self.shortcut_redo_field)
         
         # Look for default workspace
         self.load_default_workspace()
@@ -1663,12 +1723,20 @@ class OCRApp(QMainWindow):
 
         # Geometry (position/size within the actual captured frame, in
         # pixels — not the on-screen widget, which changes with window size).
-        self.edit_x = QLineEdit()
-        self.edit_y = QLineEdit()
-        self.edit_w = QLineEdit()
-        self.edit_h = QLineEdit()
+        self.edit_x = SteppedSpinBox()
+        self.edit_y = SteppedSpinBox()
+        self.edit_w = SteppedSpinBox()
+        self.edit_h = SteppedSpinBox()
         for edit in (self.edit_x, self.edit_y, self.edit_w, self.edit_h):
-            edit.setValidator(QIntValidator(0, 100_000, self))
+            edit.setRange(0, 100_000)
+            edit.setSingleStep(1)
+            edit.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+            edit.setStyleSheet("""
+                QSpinBox { background-color: #202226; color: #eceef0; border: 1px solid #34373e; padding: 6px; border-radius: 5px; font-size: 13px; }
+                QSpinBox:hover { border: 1px solid #46494f; }
+                QSpinBox::up-button, QSpinBox::down-button { width: 16px; background: #2a2c32; border-left: 1px solid #34373e; }
+                QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #34373e; }
+            """)
             edit.editingFinished.connect(self.apply_geometry_edit)
 
         props_main_layout.addLayout(grid)
@@ -1878,6 +1946,20 @@ class OCRApp(QMainWindow):
             return
         self.preview_overlay.paste_field_centered()
 
+    def shortcut_undo_field(self):
+        tw = self._focused_text_widget()
+        if tw is not None:      # normal text undo while typing / renaming
+            tw.undo()
+            return
+        self.preview_overlay.undo()
+
+    def shortcut_redo_field(self):
+        tw = self._focused_text_widget()
+        if tw is not None:      # normal text redo while typing / renaming
+            tw.redo()
+            return
+        self.preview_overlay.redo()
+
     def shortcut_rename_field(self):
         roi_id = self.preview_overlay.selected_id
         if roi_id is None:
@@ -1910,6 +1992,9 @@ class OCRApp(QMainWindow):
             new_name = item.text().strip()
             for roi in self.preview_overlay.rois:
                 if roi['id'] == roi_id:
+                    if new_name == roi['name']:
+                        break   # unchanged — nothing to undo
+                    self.preview_overlay.snapshot_before_change()
                     roi['name'] = new_name
                     if self.preview_overlay.selected_id == roi_id:
                         self.lbl_target.setText(new_name if new_name else "Unnamed Field")
@@ -2170,7 +2255,7 @@ class OCRApp(QMainWindow):
         ):
             if not edit.hasFocus():          # don't yank the cursor while the user is typing
                 edit.blockSignals(True)
-                edit.setText(str(value))
+                edit.setValue(value)
                 edit.blockSignals(False)
 
     def sync_geometry_fields_from_selection(self, _rois=None):
@@ -2196,19 +2281,19 @@ class OCRApp(QMainWindow):
         for roi in self.preview_overlay.rois:
             if roi['id'] != roi_id:
                 continue
-            try:
-                px = int(self.edit_x.text()); py = int(self.edit_y.text())
-                pw = int(self.edit_w.text()); ph = int(self.edit_h.text())
-            except ValueError:
-                self.set_geometry_fields(roi)   # invalid text — revert to the real values
-                return
+            px, py = self.edit_x.value(), self.edit_y.value()
+            pw, ph = self.edit_w.value(), self.edit_h.value()
 
             # Minimum 2% of the frame, same floor the drag-resize handle uses.
             nw = max(0.02, min(pw / fw, 1.0))
             nh = max(0.02, min(ph / fh, 1.0))
             nx = max(0.0, min(px / fw, 1.0 - nw))
             ny = max(0.0, min(py / fh, 1.0 - nh))
-            roi['rect'] = [nx, ny, nw, nh]
+            new_rect = [nx, ny, nw, nh]
+            if new_rect == roi['rect']:
+                return   # nothing actually changed — don't create a no-op undo step
+            self.preview_overlay.snapshot_before_change()
+            roi['rect'] = new_rect
             self.set_geometry_fields(roi)       # reflect any clamping back into the boxes
             break
 
