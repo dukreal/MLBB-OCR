@@ -1723,20 +1723,12 @@ class OCRApp(QMainWindow):
 
         # Geometry (position/size within the actual captured frame, in
         # pixels — not the on-screen widget, which changes with window size).
-        self.edit_x = SteppedSpinBox()
-        self.edit_y = SteppedSpinBox()
-        self.edit_w = SteppedSpinBox()
-        self.edit_h = SteppedSpinBox()
+        self.edit_x = QLineEdit()
+        self.edit_y = QLineEdit()
+        self.edit_w = QLineEdit()
+        self.edit_h = QLineEdit()
         for edit in (self.edit_x, self.edit_y, self.edit_w, self.edit_h):
-            edit.setRange(0, 100_000)
-            edit.setSingleStep(1)
-            edit.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
-            edit.setStyleSheet("""
-                QSpinBox { background-color: #202226; color: #eceef0; border: 1px solid #34373e; padding: 6px; border-radius: 5px; font-size: 13px; }
-                QSpinBox:hover { border: 1px solid #46494f; }
-                QSpinBox::up-button, QSpinBox::down-button { width: 16px; background: #2a2c32; border-left: 1px solid #34373e; }
-                QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #34373e; }
-            """)
+            edit.setValidator(QIntValidator(0, 100_000, self))
             edit.editingFinished.connect(self.apply_geometry_edit)
 
         props_main_layout.addLayout(grid)
@@ -1750,25 +1742,60 @@ class OCRApp(QMainWindow):
         lbl_geo_section.setStyleSheet("color: #6b7078; font-weight: bold; font-size: 11px; letter-spacing: 1px; border: none;")
         props_main_layout.addWidget(lbl_geo_section)
 
-        def _labeled_geo_box(label_text, edit_widget):
+        # Small +1/-1 nudge buttons beside each box — plain text glyphs
+        # ("▲"/"▼"), not a styled QSpinBox spinner: QSpinBox's native arrows
+        # disappear once you apply any stylesheet to it, and the usual CSS
+        # fix (drawing a triangle via ::up-arrow/::down-arrow) doesn't
+        # render reliably either. Plain button text always renders.
+        NUDGE_BTN_STYLE = "QPushButton { padding: 0px; font-size: 7px; color: #d6d8db; background-color: #2a2c32; border: 1px solid #383b42; }"
+
+        def _labeled_geo_box(label_text, edit_widget, on_up, on_down):
             box = QVBoxLayout()
             box.setSpacing(3)
             cap = QLabel(label_text)
             cap.setStyleSheet("color: #9aa0ab; font-size: 12px; border: none;")
             box.addWidget(cap)
-            box.addWidget(edit_widget)
+
+            row = QHBoxLayout()
+            row.setSpacing(2)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(edit_widget)
+
+            nudge_col = QVBoxLayout()
+            nudge_col.setSpacing(1)
+            nudge_col.setContentsMargins(0, 0, 0, 0)
+            btn_up = QPushButton("▲")
+            btn_down = QPushButton("▼")
+            for b in (btn_up, btn_down):
+                b.setFixedSize(20, 14)
+                b.setStyleSheet(NUDGE_BTN_STYLE)
+            btn_up.clicked.connect(on_up)
+            btn_down.clicked.connect(on_down)
+            nudge_col.addWidget(btn_up)
+            nudge_col.addWidget(btn_down)
+            row.addLayout(nudge_col)
+
+            box.addLayout(row)
             return box
 
         geo_row1 = QHBoxLayout()
         geo_row1.setSpacing(10)
-        geo_row1.addLayout(_labeled_geo_box("X", self.edit_x))
-        geo_row1.addLayout(_labeled_geo_box("Y", self.edit_y))
+        geo_row1.addLayout(_labeled_geo_box("X", self.edit_x,
+            lambda: self.nudge_geometry_field(self.edit_x, 1),
+            lambda: self.nudge_geometry_field(self.edit_x, -1)))
+        geo_row1.addLayout(_labeled_geo_box("Y", self.edit_y,
+            lambda: self.nudge_geometry_field(self.edit_y, 1),
+            lambda: self.nudge_geometry_field(self.edit_y, -1)))
         props_main_layout.addLayout(geo_row1)
 
         geo_row2 = QHBoxLayout()
         geo_row2.setSpacing(10)
-        geo_row2.addLayout(_labeled_geo_box("Width", self.edit_w))
-        geo_row2.addLayout(_labeled_geo_box("Height", self.edit_h))
+        geo_row2.addLayout(_labeled_geo_box("Width", self.edit_w,
+            lambda: self.nudge_geometry_field(self.edit_w, 1),
+            lambda: self.nudge_geometry_field(self.edit_w, -1)))
+        geo_row2.addLayout(_labeled_geo_box("Height", self.edit_h,
+            lambda: self.nudge_geometry_field(self.edit_h, 1),
+            lambda: self.nudge_geometry_field(self.edit_h, -1)))
         props_main_layout.addLayout(geo_row2)
 
         self.lbl_crop_preview = QLabel()
@@ -2255,7 +2282,7 @@ class OCRApp(QMainWindow):
         ):
             if not edit.hasFocus():          # don't yank the cursor while the user is typing
                 edit.blockSignals(True)
-                edit.setValue(value)
+                edit.setText(str(value))
                 edit.blockSignals(False)
 
     def sync_geometry_fields_from_selection(self, _rois=None):
@@ -2267,6 +2294,16 @@ class OCRApp(QMainWindow):
         roi = next((r for r in self.preview_overlay.rois if r['id'] == roi_id), None)
         if roi:
             self.set_geometry_fields(roi)
+
+    def nudge_geometry_field(self, edit_widget, delta):
+        """+1/-1 button next to a geometry box — reuses apply_geometry_edit
+        so clamping, the no-op check, and the undo snapshot all stay in sync."""
+        try:
+            current = int(edit_widget.text())
+        except ValueError:
+            current = 0
+        edit_widget.setText(str(max(0, current + delta)))
+        self.apply_geometry_edit()
 
     def apply_geometry_edit(self):
         """User edited X/Y/Width/Height directly — write it back to the ROI."""
@@ -2281,8 +2318,12 @@ class OCRApp(QMainWindow):
         for roi in self.preview_overlay.rois:
             if roi['id'] != roi_id:
                 continue
-            px, py = self.edit_x.value(), self.edit_y.value()
-            pw, ph = self.edit_w.value(), self.edit_h.value()
+            try:
+                px, py = int(self.edit_x.text()), int(self.edit_y.text())
+                pw, ph = int(self.edit_w.text()), int(self.edit_h.text())
+            except ValueError:
+                self.set_geometry_fields(roi)   # invalid text — revert to the real values
+                return
 
             # Minimum 2% of the frame, same floor the drag-resize handle uses.
             nw = max(0.02, min(pw / fw, 1.0))
@@ -2291,7 +2332,8 @@ class OCRApp(QMainWindow):
             ny = max(0.0, min(py / fh, 1.0 - nh))
             new_rect = [nx, ny, nw, nh]
             if new_rect == roi['rect']:
-                return   # nothing actually changed — don't create a no-op undo step
+                self.set_geometry_fields(roi)   # resync the box to the real value (e.g. after clamping) — no undo step needed since nothing moved
+                return
             self.preview_overlay.snapshot_before_change()
             roi['rect'] = new_rect
             self.set_geometry_fields(roi)       # reflect any clamping back into the boxes
