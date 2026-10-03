@@ -1456,6 +1456,7 @@ class OCRApp(QMainWindow):
         """)
         
         self.ocr_validator = OCRValidator()
+        self._gold_totals_state = {}   # holds last-known-good blue_total/red_total for the hold-steady rule
 
         self.engine = CaptureEngine()
         self.engine.frame_signal.connect(self.update_preview)
@@ -2343,6 +2344,42 @@ class OCRApp(QMainWindow):
         self.engine.update_rois(self.preview_overlay.rois)
         self.preview_overlay.rois_changed.emit(self.preview_overlay.rois)
 
+    def compute_gold_totals(self, display_dict):
+        """
+        Compute team gold totals from the 5 individual player gold fields
+        per side (gold-blue-p1..p5 / gold-red-p1..p5), using the already
+        validated values in display_dict — not raw OCR text. Handles the
+        "12.4K" -> 12400 conversion via the same parser used for gold
+        validation. If any one of the 5 fields on a side fails to parse
+        this cycle (blank, not yet read, discarded, etc.), that team's
+        total holds at its last good value instead of being recomputed
+        with a gap, so the total never silently drops because one player's
+        gold misread for a frame.
+        """
+        for side in ("blue", "red"):
+            keys = [f"gold-{side}-p{i}" for i in range(1, 6)]
+            if not all(k in display_dict for k in keys):
+                continue  # this side's 5 fields aren't all set up yet
+            values = [self.ocr_validator.parse_value(display_dict[k]) for k in keys]
+            if all(v is not None for v in values):
+                self._gold_totals_state[f"{side}_total"] = sum(values)
+            # else: leave _gold_totals_state untouched — hold the last good total
+
+        blue_total = self._gold_totals_state.get("blue_total")
+        red_total = self._gold_totals_state.get("red_total")
+        if blue_total is None or red_total is None:
+            return  # not enough data from one or both sides yet
+
+        display_dict["gold-blue-total"] = str(int(round(blue_total)))
+        display_dict["gold-red-total"] = str(int(round(red_total)))
+        display_dict["gold-difference"] = str(int(round(abs(blue_total - red_total))))
+        if blue_total > red_total:
+            display_dict["gold-advantage"] = "Blue"
+        elif red_total > blue_total:
+            display_dict["gold-advantage"] = "Red"
+        else:
+            display_dict["gold-advantage"] = "Tied"
+
     def sync_properties(self):
         roi_id = self.preview_overlay.selected_id
         if roi_id is None: return
@@ -2477,7 +2514,9 @@ class OCRApp(QMainWindow):
                 display_dict[safe_name] = current_value
                 
         self.internal_update = False
-        
+
+        self.compute_gold_totals(display_dict)
+
         formatted_json = json.dumps(display_dict, indent=4)
         
         # Update the text in the UI
