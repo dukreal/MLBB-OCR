@@ -1,1 +1,407 @@
-[]
+[
+    {
+        "id": 61,
+        "name": "kda-blue-p1",
+        "rect": [
+            0.02,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 62,
+        "name": "kda-blue-p2",
+        "rect": [
+            0.08,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 63,
+        "name": "kda-blue-p3",
+        "rect": [
+            0.13999999999999999,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 64,
+        "name": "kda-blue-p4",
+        "rect": [
+            0.19999999999999998,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 65,
+        "name": "kda-blue-p5",
+        "rect": [
+            0.26,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 66,
+        "name": "kda-red-p1",
+        "rect": [
+            0.32,
+            0.02,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 67,
+        "name": "kda-red-p2",
+        "rect": [
+            0.92243623112962,
+            0.42645698427382056,
+            0.0338365434669443,
+            0.02127659574468085
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 5,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 88,
+        "name": "kda-red-p3",
+        "rect": [
+            0.92243623112962,
+            0.5087881591119334,
+            0.0338365434669443,
+            0.02127659574468085
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 5,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 69,
+        "name": "kda-red-p4",
+        "rect": [
+            0.6799431009957324,
+            0.4334007585335019,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 70,
+        "name": "kda-red-p5",
+        "rect": [
+            0.02,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "KDA (K/D/A)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 71,
+        "name": "gold-blue-p1",
+        "rect": [
+            0.08,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 72,
+        "name": "gold-blue-p2",
+        "rect": [
+            0.13999999999999999,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 73,
+        "name": "gold-blue-p3",
+        "rect": [
+            0.19999999999999998,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 74,
+        "name": "gold-blue-p4",
+        "rect": [
+            0.26,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 75,
+        "name": "gold-blue-p5",
+        "rect": [
+            0.32,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 76,
+        "name": "gold-red-p1",
+        "rect": [
+            0.38,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 77,
+        "name": "gold-red-p2",
+        "rect": [
+            0.44,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 78,
+        "name": "gold-red-p3",
+        "rect": [
+            0.5,
+            0.075,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 79,
+        "name": "gold-red-p4",
+        "rect": [
+            0.02,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 80,
+        "name": "gold-red-p5",
+        "rect": [
+            0.08,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Gold Amount (K/M)",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 81,
+        "name": "timer",
+        "rect": [
+            0.13999999999999999,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Time Format",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 82,
+        "name": "tower-blue",
+        "rect": [
+            0.19999999999999998,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 83,
+        "name": "tower-red",
+        "rect": [
+            0.26,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 84,
+        "name": "lord-blue",
+        "rect": [
+            0.32,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 85,
+        "name": "lord-red",
+        "rect": [
+            0.38,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 86,
+        "name": "score-blue",
+        "rect": [
+            0.44,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    },
+    {
+        "id": 87,
+        "name": "score-red",
+        "rect": [
+            0.5,
+            0.13,
+            0.05,
+            0.035
+        ],
+        "type": "Numbers Only",
+        "threshold": 1,
+        "thickness": 5,
+        "confidence": 6,
+        "is_on_scene": true
+    }
+]
