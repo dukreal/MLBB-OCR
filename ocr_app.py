@@ -1981,10 +1981,13 @@ class OCRApp(QMainWindow):
                 json.dump(self.preview_overlay.rois, f, indent=4)
             self.btn_save_def.setStyleSheet("background-color: #3ecf8e; color: #0c0d0f; font-weight: bold;")
             self.btn_save_def.setText("Saved!")
-            QApplication.processEvents()
-            time.sleep(0.5)
-            self.btn_save_def.setStyleSheet("background-color: #2a2c32; color: white;")
-            self.btn_save_def.setText("Set as Default")
+
+            def _restore_button():
+                self.btn_save_def.setStyleSheet("background-color: #2a2c32; color: white;")
+                self.btn_save_def.setText("Set as Default")
+
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, _restore_button)   # non-blocking: the UI stays responsive
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to set default: {e}")
 
