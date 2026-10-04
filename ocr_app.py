@@ -547,16 +547,18 @@ class OCRValidator:
 
     def reset(self, field_name: str | None = None) -> None:
         """Clear all stored state for one field, or all fields."""
+        all_state = (
+            self._last_values, self._last_raw,
+            self._pending_value, self._pending_raw, self._pending_count,
+            self._correction_value, self._correction_count,
+            self._last_kda, self._kda_pending, self._kda_pending_count,
+        )
         if field_name is None:
-            self._last_values.clear()
-            self._last_raw.clear()
-            self._pending_value.clear()
-            self._pending_raw.clear()
-            self._pending_count.clear()
+            for state in all_state:
+                state.clear()
         else:
-            self._last_values.pop(field_name, None)
-            self._last_raw.pop(field_name,    None)
-            self._clear_pending(field_name)
+            for state in all_state:
+                state.pop(field_name, None)
 
 class BITMAPINFOHEADER(ctypes.Structure):
     _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
@@ -1941,6 +1943,10 @@ class OCRApp(QMainWindow):
             
             # Inject Data
             self.preview_overlay.rois = data
+
+            # New profile = new set of fields: drop old validator/gold-total state
+            self.ocr_validator.reset()
+            self._gold_totals_state.clear()
             
             # Fix area counter so new boxes don't overlap IDs
             if data:
@@ -2412,6 +2418,9 @@ class OCRApp(QMainWindow):
             # flash to 0 when simply pausing/resuming OCR during a live game.
             # Existing values now just stay on screen until OCR reconfirms
             # them, which is what we want when resuming.
+            # Fresh validation baselines on each Start (displayed values are kept)
+            self.ocr_validator.reset()
+            self._gold_totals_state.clear()
             self.tabs.setCurrentIndex(1)
 
     def update_preview(self, frame):
