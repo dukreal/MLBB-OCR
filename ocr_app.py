@@ -45,8 +45,35 @@ if os.path.exists(local_tess):
 else:
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
+# Private DLL handles (not the shared ctypes.windll ones, which pygetwindow also
+# uses) with declared types so 64-bit handles are never truncated.
+user32 = ctypes.WinDLL("user32")
+gdi32 = ctypes.WinDLL("gdi32")
+
+_H = ctypes.c_void_p   # HWND / HDC / HBITMAP / HGDIOBJ
+
+user32.GetWindowRect.argtypes = [_H, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.GetWindowDC.argtypes = [_H]
+user32.GetWindowDC.restype = _H
+user32.ReleaseDC.argtypes = [_H, _H]
+user32.ReleaseDC.restype = ctypes.c_int
+user32.PrintWindow.argtypes = [_H, _H, wintypes.UINT]
+user32.PrintWindow.restype = wintypes.BOOL
+
+gdi32.CreateCompatibleDC.argtypes = [_H]
+gdi32.CreateCompatibleDC.restype = _H
+gdi32.CreateCompatibleBitmap.argtypes = [_H, ctypes.c_int, ctypes.c_int]
+gdi32.CreateCompatibleBitmap.restype = _H
+gdi32.SelectObject.argtypes = [_H, _H]
+gdi32.SelectObject.restype = _H
+gdi32.GetDIBits.argtypes = [_H, _H, wintypes.UINT, wintypes.UINT,
+                            ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+gdi32.GetDIBits.restype = ctypes.c_int
+gdi32.DeleteDC.argtypes = [_H]
+gdi32.DeleteDC.restype = wintypes.BOOL
+gdi32.DeleteObject.argtypes = [_H]
+gdi32.DeleteObject.restype = wintypes.BOOL
 
 # ==========================================================
 # OCR VALIDATION LAYER
@@ -1011,36 +1038,48 @@ class CaptureEngine(QThread):
         w, h = rect.right - rect.left, rect.bottom - rect.top
         if w <= 0 or h <= 0: return None
 
-        hwndDC = user32.GetWindowDC(hwnd)
-        mfcDC = gdi32.CreateCompatibleDC(hwndDC)
-        saveBitMap = gdi32.CreateCompatibleBitmap(hwndDC, w, h)
-        gdi32.SelectObject(mfcDC, saveBitMap)
-
-        # PW_RENDERFULLCONTENT (flag=3): captures GPU/DX/OpenGL content on Win8.1+
-        # This is the best option for emulators, but many (MuMu, BlueStacks, LDPlayer)
-        # still return a black bitmap because they composite entirely on the GPU.
-        result = user32.PrintWindow(hwnd, mfcDC, 3)
-        if result == 0:
-            # Flag 2 = client area only (legacy fallback)
-            result = user32.PrintWindow(hwnd, mfcDC, 2)
-
+        hwndDC = mfcDC = saveBitMap = None
         img = None
-        if result != 0:
-            bmi = BITMAPINFO()
-            bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-            bmi.bmiHeader.biWidth = w
-            bmi.bmiHeader.biHeight = -h
-            bmi.bmiHeader.biPlanes = 1
-            bmi.bmiHeader.biBitCount = 32
-            bmi.bmiHeader.biCompression = 0
-            buffer = ctypes.create_string_buffer(w * h * 4)
-            gdi32.GetDIBits(mfcDC, saveBitMap, 0, h, buffer, ctypes.byref(bmi), 0)
-            img = np.frombuffer(buffer, dtype=np.uint8).reshape((h, w, 4)).copy()
-            img[:, :, 3] = 255
+        try:
+            hwndDC = user32.GetWindowDC(hwnd)
+            if not hwndDC:
+                return None
+            mfcDC = gdi32.CreateCompatibleDC(hwndDC)
+            if not mfcDC:
+                return None
+            saveBitMap = gdi32.CreateCompatibleBitmap(hwndDC, w, h)
+            if not saveBitMap:
+                return None
+            gdi32.SelectObject(mfcDC, saveBitMap)
 
-        user32.ReleaseDC(hwnd, hwndDC)
-        gdi32.DeleteDC(mfcDC)
-        gdi32.DeleteObject(saveBitMap)
+            # PW_RENDERFULLCONTENT (flag=3): captures GPU/DX/OpenGL content on Win8.1+
+            # This is the best option for emulators, but many (MuMu, BlueStacks, LDPlayer)
+            # still return a black bitmap because they composite entirely on the GPU.
+            result = user32.PrintWindow(hwnd, mfcDC, 3)
+            if result == 0:
+                # Flag 2 = client area only (legacy fallback)
+                result = user32.PrintWindow(hwnd, mfcDC, 2)
+
+            if result != 0:
+                bmi = BITMAPINFO()
+                bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                bmi.bmiHeader.biWidth = w
+                bmi.bmiHeader.biHeight = -h
+                bmi.bmiHeader.biPlanes = 1
+                bmi.bmiHeader.biBitCount = 32
+                bmi.bmiHeader.biCompression = 0
+                buffer = ctypes.create_string_buffer(w * h * 4)
+                gdi32.GetDIBits(mfcDC, saveBitMap, 0, h, buffer, ctypes.byref(bmi), 0)
+                img = np.frombuffer(buffer, dtype=np.uint8).reshape((h, w, 4)).copy()
+                img[:, :, 3] = 255
+        finally:
+            # Always release whatever was actually created, even on early return or error.
+            if hwndDC:
+                user32.ReleaseDC(hwnd, hwndDC)
+            if mfcDC:
+                gdi32.DeleteDC(mfcDC)
+            if saveBitMap:
+                gdi32.DeleteObject(saveBitMap)
 
         # If PrintWindow gave us a blank frame (common for GPU-rendered emulators),
         # return None so the caller knows to fall back to MSS screen grab.
