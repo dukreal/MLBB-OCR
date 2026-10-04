@@ -593,6 +593,7 @@ class ROIOverlayWidget(QWidget):
         self.undo_stack = []
         self.redo_stack = []
         self.UNDO_LIMIT = 50
+        self._snapshot_pending = False   # True between a press on a field and the first real drag movement
 
     def snapshot_before_change(self):
         """Call this right before a field-affecting change (move, resize,
@@ -886,14 +887,14 @@ class ROIOverlayWidget(QWidget):
             full_box = QRect(int(rx), int(ry), int(rw), int(rh))
             
             if resize_handle.contains(mx, my):
-                self.snapshot_before_change()
+                self._snapshot_pending = True
                 self.selected_id = roi['id']
                 self.drag_state = 'resize'
                 self.last_mouse_pos = (mx, my)
                 clicked_roi = roi
                 break
             elif full_box.contains(mx, my):
-                self.snapshot_before_change()
+                self._snapshot_pending = True
                 self.selected_id = roi['id']
                 self.drag_state = 'move'
                 self.last_mouse_pos = (mx, my)
@@ -915,6 +916,12 @@ class ROIOverlayWidget(QWidget):
         self.last_mouse_pos = (mx, my)
         
         dnx, dny = dx / self.width(), dy / self.height()
+
+        # First real movement of this drag = the one and only undo step for it.
+        # (The fields haven't changed since the press, so this captures the pre-drag state.)
+        if self._snapshot_pending and (dx or dy):
+            self.snapshot_before_change()
+            self._snapshot_pending = False
         
         for roi in self.rois:
             if roi['id'] == self.selected_id and roi['is_on_scene']:
@@ -935,6 +942,7 @@ class ROIOverlayWidget(QWidget):
     def mouseReleaseEvent(self, event):
         self.drag_state = None
         self.last_mouse_pos = None
+        self._snapshot_pending = False   # a click with no drag leaves no undo step
 
 class CaptureEngine(QThread):
     frame_signal = pyqtSignal(np.ndarray)
