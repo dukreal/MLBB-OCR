@@ -1238,8 +1238,6 @@ class CaptureEngine(QThread):
             self.current_fps = 0
 
             while self.running:
-                loop_start = time.time() 
-
                 if self._new_source_requested:
                     if cap is not None:
                         cap.release()
@@ -1312,14 +1310,14 @@ class CaptureEngine(QThread):
                     if cap is None and getattr(self, '_cap_ready', None) and self._cap_ready.is_set():
                         cap = self._cap_result[0]
                         if cap is None:
-                            print(f"[CaptureCard] All backends failed — will not retry until source changes")
+                            print("[CaptureCard] All backends failed — will not retry until source changes")
                             self.source_type = None  # stop retrying
                     if cap and cap.isOpened():
                         ret, v_frame = cap.read()
                         if ret:
                             frame = cv2.cvtColor(v_frame, cv2.COLOR_BGR2BGRA)
                         else:
-                            print(f"[CaptureCard] read() returned False — device may still be warming up")
+                            print("[CaptureCard] read() returned False — device may still be warming up")
                             cap.release()
                             cap = None
                             self._cap_opening = False
