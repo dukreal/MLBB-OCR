@@ -458,7 +458,11 @@ class OCRValidator:
 
                         print(f"[Validator] [{field_name}] BLOCKED drop {prev}→{new_num} "
                               f"(drop={drop}, max_drop={max_drop}, correction {corr_count}/{self.CORRECTION_OVERRIDE})")
-                        self._clear_pending(field_name)
+                        # Clear only the pending-jump state. Do NOT call _clear_pending()
+                        # here — it also wipes the correction counter updated above.
+                        self._pending_value.pop(field_name, None)
+                        self._pending_raw.pop(field_name, None)
+                        self._pending_count.pop(field_name, None)
                         return self._last_raw.get(field_name, current_display)
 
         # ---- 5. First-value confirmation ----
