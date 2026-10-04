@@ -2078,6 +2078,13 @@ class OCRApp(QMainWindow):
                 if roi['id'] == roi_id:
                     if new_name == roi['name']:
                         break   # unchanged — nothing to undo
+                    # Names are the JSON/validator keys, so another field can't share one.
+                    if any(r['name'] == new_name for r in self.preview_overlay.rois if r['id'] != roi_id):
+                        print(f"[Rename] '{new_name}' is already used by another field — keeping '{roi['name']}'")
+                        self.internal_update = True
+                        item.setText(roi['name'])      # put the old name back in the table
+                        self.internal_update = False
+                        break
                     self.preview_overlay.snapshot_before_change()
                     roi['name'] = new_name
                     if self.preview_overlay.selected_id == roi_id:
