@@ -2567,8 +2567,10 @@ class OCRApp(QMainWindow):
         # ---------------------------------------------------------
         try:
             export_path = os.path.join(current_dir, "live_overlay_data.json")
-            with open(export_path, "w", encoding="utf-8") as f:
+            tmp_path = export_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(display_dict, f, indent=4)
+            os.replace(tmp_path, export_path)   # atomic swap: readers never see a partial file
         except Exception as e:
             pass
 
