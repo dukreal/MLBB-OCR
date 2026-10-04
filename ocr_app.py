@@ -1958,26 +1958,50 @@ class OCRApp(QMainWindow):
         try:
             with open(path, 'r') as f:
                 data = json.load(f)
-            
+
+            if not isinstance(data, list):
+                raise ValueError("profile file must contain a list of fields")
+
+            # Keep only usable entries; fill in defaults for older profiles
+            # that are missing optional settings.
+            defaults = {
+                'type': 'General Text', 'threshold': 1, 'thickness': 5,
+                'confidence': 6, 'is_on_scene': False,
+            }
+            rois = []
+            for entry in data:
+                rect = entry.get('rect') if isinstance(entry, dict) else None
+                if (not isinstance(entry, dict) or 'id' not in entry or 'name' not in entry
+                        or not isinstance(rect, list) or len(rect) != 4):
+                    print(f"[Profile] Skipped invalid entry: {entry!r}")
+                    continue
+                for key, value in defaults.items():
+                    entry.setdefault(key, value)
+                rois.append(entry)
+
             # Reset UI States
             self.preview_overlay.selected_id = None
             self.enable_properties_panel(False)
-            
+
             # Inject Data
-            self.preview_overlay.rois = data
+            self.preview_overlay.rois = rois
+
+            # Old undo history belongs to the previous profile
+            self.preview_overlay.undo_stack.clear()
+            self.preview_overlay.redo_stack.clear()
 
             # New profile = new set of fields: drop old validator/gold-total state
             self.ocr_validator.reset()
             self._gold_totals_state.clear()
-            
+
             # Fix area counter so new boxes don't overlap IDs
-            if data:
-                max_id = max(roi['id'] for roi in data)
+            if rois:
+                max_id = max(roi['id'] for roi in rois)
                 self.preview_overlay.area_counter = max_id + 1
             else:
                 self.preview_overlay.area_counter = 1
-                
-            self.sync_table_to_rois(data)
+
+            self.sync_table_to_rois(rois)
             self.preview_overlay.update()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load profile: {e}")
