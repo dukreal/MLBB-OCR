@@ -1151,6 +1151,11 @@ class CaptureEngine(QThread):
                 timestamp = time.strftime("%H:%M:%S")
                 raw_line = f"[{timestamp}] " + " | ".join(f"{k}={v}" for k, v in extracted_data.items())
                 raw_log_path = os.path.join(current_dir, "raw_ocr_log.txt")
+                try:
+                    if os.path.getsize(raw_log_path) > 10 * 1024 * 1024:   # 10 MB cap
+                        os.replace(raw_log_path, raw_log_path + ".old")
+                except OSError:
+                    pass   # file doesn't exist yet, or another thread just rotated it
                 with open(raw_log_path, "a", encoding="utf-8") as rf:
                     rf.write(raw_line + "\n")
         except Exception:
