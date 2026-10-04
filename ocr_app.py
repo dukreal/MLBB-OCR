@@ -2558,21 +2558,6 @@ class OCRApp(QMainWindow):
         except Exception as e:
             pass
 
-        # ---------------------------------------------------------
-        # GOLD LOG — appends one line per frame to gold-log.txt
-        # Format: [HH:MM:SS] red gold: <val> | blue gold: <val>
-        # ---------------------------------------------------------
-        try:
-            blue_gold = display_dict.get("blue-gold", "")
-            red_gold  = display_dict.get("red-gold",  "")
-            if blue_gold or red_gold:
-                timestamp = time.strftime("%H:%M:%S")
-                log_line  = f"[{timestamp}] red gold: {red_gold} | blue gold: {blue_gold}\n"
-                log_path  = os.path.join(current_dir, "gold-log.txt")
-                with open(log_path, "a", encoding="utf-8") as lf:
-                    lf.write(log_line)
-        except Exception:
-            pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
