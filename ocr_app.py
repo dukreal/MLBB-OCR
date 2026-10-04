@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QComboBox, QFrame, QFileDialog, QScrollArea, QSlider, QSpinBox,
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QGridLayout, QMessageBox,
                              QLineEdit)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon, QIntValidator
 
 # --- DPI Scaling Fixes ---
@@ -1989,7 +1989,6 @@ class OCRApp(QMainWindow):
                 self.btn_save_def.setStyleSheet("background-color: #2a2c32; color: white;")
                 self.btn_save_def.setText("Set as Default")
 
-            from PyQt6.QtCore import QTimer
             QTimer.singleShot(500, _restore_button)   # non-blocking: the UI stays responsive
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to set default: {e}")
@@ -2533,7 +2532,6 @@ class OCRApp(QMainWindow):
             self.btn_add_preset.setText(f"Added {added} fields — drag them into place")
         else:
             self.btn_add_preset.setText(f"Added {added}, skipped {skipped} existing")
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(2500, lambda: self.btn_add_preset.setText("Add MLBB Preset Fields"))
 
     def copy_crop_preview(self):
@@ -2550,7 +2548,6 @@ class OCRApp(QMainWindow):
             qimg = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
             QApplication.clipboard().setImage(qimg)
             self.btn_copy_crop.setText("Copied!")
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(1200, lambda: self.btn_copy_crop.setText("Copy Image"))
 
     def update_roi_preview(self, previews_dict):
