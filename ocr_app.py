@@ -2538,17 +2538,6 @@ class OCRApp(QMainWindow):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(2500, lambda: self.btn_add_preset.setText("Add MLBB Preset Fields"))
 
-    def add_preset_fields_clicked(self):
-        added, skipped = self.preview_overlay.add_preset_fields()
-        if added == 0:
-            self.btn_add_preset.setText("All preset fields already added")
-        elif skipped == 0:
-            self.btn_add_preset.setText(f"Added {added} fields — drag them into place")
-        else:
-            self.btn_add_preset.setText(f"Added {added}, skipped {skipped} existing")
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(2500, lambda: self.btn_add_preset.setText("Add MLBB Preset Fields"))
-
     def copy_crop_preview(self):
         img = getattr(self, 'last_crop_image', None)
         if img is None or img.size == 0:
