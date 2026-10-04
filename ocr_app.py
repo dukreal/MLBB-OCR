@@ -1489,6 +1489,15 @@ class OCRApp(QMainWindow):
         # Look for default workspace
         self.load_default_workspace()
 
+    def closeEvent(self, event):
+        """Stop the capture thread and release resources before the window closes."""
+        self.engine.stop()
+        if not self.engine.wait(3000):      # give the loop up to 3 s to exit on its own
+            self.engine.terminate()         # last resort so the process can't hang on exit
+            self.engine.wait()
+        self.engine.executor.shutdown(wait=False, cancel_futures=True)
+        event.accept()
+
     def init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
