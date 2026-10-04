@@ -993,6 +993,7 @@ class CaptureEngine(QThread):
         self.fps_start_time = time.time()
         self.fps_counter = 0
         self.current_fps = 0
+        self._raw_log_failed = False   # so a failing raw-log write is reported once, not every cycle
 
     def set_thread_count(self, count):
         self.thread_count = count
@@ -1205,8 +1206,11 @@ class CaptureEngine(QThread):
                     pass   # file doesn't exist yet, or another thread just rotated it
                 with open(raw_log_path, "a", encoding="utf-8") as rf:
                     rf.write(raw_line + "\n")
-        except Exception:
-            pass
+                self._raw_log_failed = False
+        except Exception as e:
+            if not self._raw_log_failed:
+                print(f"[Log] Could not write raw_ocr_log.txt: {e}")
+                self._raw_log_failed = True
 
         ocr_end_time = time.time()
         if extracted_data:
@@ -1514,6 +1518,7 @@ class OCRApp(QMainWindow):
         """)
         
         self.ocr_validator = OCRValidator()
+        self._export_failed = False   # so a failing overlay write is reported once, not every cycle
         self._gold_totals_state = {}   # holds last-known-good blue_total/red_total for the hold-steady rule
 
         self.engine = CaptureEngine()
@@ -2649,8 +2654,11 @@ class OCRApp(QMainWindow):
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(display_dict, f, indent=4)
             os.replace(tmp_path, export_path)   # atomic swap: readers never see a partial file
+            self._export_failed = False
         except Exception as e:
-            pass
+            if not self._export_failed:
+                print(f"[Export] Could not write live_overlay_data.json: {e}")
+                self._export_failed = True
 
 
 if __name__ == "__main__":
