@@ -145,26 +145,6 @@ class OCRValidator:
         "blue-kill": {"min_val": 0, "max_val": 40, "max_jump": 8, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
         "red-kill":  {"min_val": 0, "max_val": 40, "max_jump": 8, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
 
-        # Gold — millions impossible in-match; large drops are always OCR noise
-        # Death penalty in MLBB is ~300 gold max, so max_drop is tight.
-        # min_floor_pct=0.5 means: if new value < 50% of last, reject instantly.
-        "blue-gold": {
-            "min_val": 0, "max_val": 999_999,
-            "max_jump": 2_500, "max_drop": 400,
-            "min_floor_pct": 0.1,  # only block if drops below 10% of last value
-            "block_m_suffix": True,
-            "confirm_needed": 5,
-            "confirm_drop": True,
-        },
-        "red-gold": {
-            "min_val": 0, "max_val": 999_999,
-            "max_jump": 2_500, "max_drop": 400,
-            "min_floor_pct": 0.1,  # only block if drops below 10% of last value
-            "block_m_suffix": True,
-            "confirm_needed": 5,
-            "confirm_drop": True,
-        },
-
         # Lord kills — confirm_first prevents misread locking baseline from 0
         "lord-blue":  {"min_val": 0, "max_val": 10, "max_jump": 10, "max_drop": 10, "confirm_first": True, "confirm_needed": 8},
         "lord-red":   {"min_val": 0, "max_val": 10, "max_jump": 10, "max_drop": 10, "confirm_first": True, "confirm_needed": 8},
@@ -180,10 +160,11 @@ class OCRValidator:
         "score-red":  {"min_val": 0, "max_val": 60, "max_jump": 10, "max_drop": 3, "confirm_first": True, "confirm_needed": 3, "confirm_drop": True},
     }
 
-    # Same limits as blue-gold/red-gold above, but applied by the ROI's
-    # Format type ("Gold Amount (K/M)") instead of by name — so it works
-    # regardless of what you actually name each player's gold field
-    # (name-substring matching can't cover every naming convention).
+    # Gold limits, applied by the ROI's Format type ("Gold Amount (K/M)")
+    # instead of by name — so it works regardless of what you actually name
+    # each player's gold field (name-substring matching can't cover every
+    # naming convention). Millions are impossible in-match, and the death
+    # penalty is ~300 gold, so max_drop is tight.
     GOLD_FIELD_RULE = {
         "min_val": 0, "max_val": 999_999,
         "max_jump": 2_500, "max_drop": 400,
