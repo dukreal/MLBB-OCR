@@ -2217,12 +2217,9 @@ class OCRApp(QMainWindow):
         if idx is None:
             return
         self.preview_overlay.is_new_source = True
-        import threading
-        def _open():
-            self.engine.set_source_capture_card(idx, name)
-            if not self.engine.isRunning():
-                self.engine.start()
-        threading.Thread(target=_open, daemon=True).start()
+        self.engine.set_source_capture_card(idx, name)
+        if not self.engine.isRunning():
+            self.engine.start()
 
     def refresh_card_list(self):
         self.combo_card_index.blockSignals(True)
