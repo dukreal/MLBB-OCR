@@ -24,6 +24,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QShortcut, QKeySequence, QIcon, QIntValidator
 
+# A print() containing a character the console encoding can't handle (→, ✅ ...)
+# raises UnicodeEncodeError, and inside a Qt callback that kills the whole app.
+# Piping or redirecting the output (e.g. Tee-Object) triggers it. Replace instead.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 # --- DPI Scaling Fixes ---
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 os.environ["QT_AUTOSCREENSCALEFACTOR"] = "1"
